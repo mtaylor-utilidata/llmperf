@@ -46,6 +46,7 @@ class OpenAIChatCompletionsClient(LLMClient):
         metrics[common_metrics.ERROR_MSG] = ""
 
         start_time = time.monotonic()
+        unix_start_time = time.time()
         most_recent_received_token_time = time.monotonic()
         address = os.environ.get("OPENAI_API_BASE")
         if not address:
@@ -112,6 +113,8 @@ class OpenAIChatCompletionsClient(LLMClient):
         metrics[common_metrics.INTER_TOKEN_LAT] = sum(time_to_next_token) #This should be same as metrics[common_metrics.E2E_LAT]. Leave it here for now
         metrics[common_metrics.TTFT] = ttft
         metrics[common_metrics.E2E_LAT] = total_request_time
+        metrics[common_metrics.START_TIME] = unix_start_time
+        metrics[common_metrics.END_TIME] = time.time()
         metrics[common_metrics.REQ_OUTPUT_THROUGHPUT] = output_throughput
         metrics[common_metrics.NUM_TOTAL_TOKENS] = tokens_received + prompt_len
         metrics[common_metrics.NUM_OUTPUT_TOKENS] = tokens_received
