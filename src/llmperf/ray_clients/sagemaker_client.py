@@ -73,6 +73,7 @@ class SageMakerClient(LLMClient):
         metrics = {}
 
         start_time = time.monotonic()
+        unix_start_time = time.time()
         most_recent_received_token_time = time.monotonic()
 
         try:
@@ -109,6 +110,8 @@ class SageMakerClient(LLMClient):
         metrics[common_metrics.INTER_TOKEN_LAT] = time_to_next_token
         metrics[common_metrics.TTFT] = ttft
         metrics[common_metrics.E2E_LAT] = total_request_time
+        metrics[common_metrics.START_TIME] = unix_start_time
+        metrics[common_metrics.END_TIME] = time.time()
         metrics[common_metrics.REQ_OUTPUT_THROUGHPUT] = output_throughput
         metrics[common_metrics.NUM_TOTAL_TOKENS] = tokens_received + prompt_len
         metrics[common_metrics.NUM_OUTPUT_TOKENS] = tokens_received
