@@ -463,6 +463,18 @@ args.add_argument(
     ),
 )
 
+# NEW: optional replay/scheduler file (just parsed here; behavior wired later)
+args.add_argument(
+    "--schedule-file",
+    type=str,
+    default="",
+    help=(
+        "Optional CSV with rows: delta_from_t0,input_tokens,output_tokens. "
+        "When provided, stddevs are forced to 0."
+    ),
+)
+
+
 if __name__ == "__main__":
     env_vars = dict(os.environ)
     ray.init(runtime_env={"env_vars": env_vars})
@@ -474,6 +486,11 @@ if __name__ == "__main__":
         for item in args.metadata.split(","):
             key, value = item.split("=")
             user_metadata[key] = value
+
+    # If a schedule file is provided, per spec: ignore stddevs (force to 0).
+    if args.schedule_file:
+        args.stddev_input_tokens = 0
+        args.stddev_output_tokens = 0
 
     run_token_benchmark(
         llm_api=args.llm_api,
@@ -489,3 +506,4 @@ if __name__ == "__main__":
         results_dir=args.results_dir,
         user_metadata=user_metadata,
     )
+
