@@ -84,7 +84,10 @@ def run_schedule_mode(
         request_id = sched["request_id"]
         scheduled_offset = sched["scheduled_offset_s"]
 
-        # Prepare everything we can *before* waiting
+        # To reduce memory load from prompts, wait to prep prompt and request config till 1s before launch
+        time.sleep(max(0, base_time + scheduled_offset - time.monotonic() - 1.0))
+
+        # Prepare everything we can *before* waiting for final launch
         prompt = randomly_sample_sonnet_lines_prompt(
             prompt_tokens_mean=sched["input_tokens"],
             prompt_tokens_stddev=0,
@@ -95,19 +98,7 @@ def run_schedule_mode(
         default_sampling_params = {"max_tokens": sched["output_tokens"]}
         default_sampling_params.update(json.loads(additional_sampling_params))
 
-        # Sleep until scheduled time
-        time.sleep(max(0, base_time + scheduled_offset - time.monotonic()))
-
-        dispatch_ts_mono = time.monotonic()
-        dispatch_offset = dispatch_ts_mono - base_time
-        dispatch_lag = dispatch_offset - scheduled_offset
-
-        dispatch_ts = time.time()
-        dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
-
-        print(f"[request #{request_id}] Dispatching at offset {dispatch_offset:.3f}s "
-              f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
-
+        # Prepare request config and construct clients
         request_config = RequestConfig(
             model=model,
             prompt=prompt,
@@ -117,6 +108,22 @@ def run_schedule_mode(
 
         clients = construct_clients(llm_api=llm_api, num_clients=1)
         req_launcher = RequestsLauncher(clients)
+
+        # Sleep until scheduled time for launch
+        time.sleep(max(0, base_time + scheduled_offset - time.monotonic()))
+
+        # Capture times
+        dispatch_ts_mono = time.monotonic()
+        dispatch_offset = dispatch_ts_mono - base_time
+        dispatch_lag = dispatch_offset - scheduled_offset
+
+        dispatch_ts = time.time()
+        dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
+
+        print(f"[request #{request_id}] Dispatching at offset {dispatch_offset:.3f}s "
+          f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
+
+        # Launch request
         req_launcher.launch_requests(request_config)
 
         outs = req_launcher.get_next_ready()
