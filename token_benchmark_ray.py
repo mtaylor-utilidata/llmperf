@@ -112,6 +112,11 @@ def run_schedule_mode(
         # Sleep until scheduled time for launch
         time.sleep(max(0, base_time + scheduled_offset - time.monotonic()))
 
+
+
+        # Launch request
+        req_launcher.launch_requests(request_config)
+
         # Capture times
         dispatch_ts_mono = time.monotonic()
         dispatch_offset = dispatch_ts_mono - base_time
@@ -120,11 +125,8 @@ def run_schedule_mode(
         dispatch_ts = time.time()
         dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
 
-        print(f"[request #{request_id}] Dispatching at offset {dispatch_offset:.3f}s "
-          f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
-
-        # Launch request
-        req_launcher.launch_requests(request_config)
+        print(f"[request #{request_id}] Dispatched at offset {dispatch_offset:.3f}s "
+              f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
 
         outs = req_launcher.get_next_ready()
         for out in outs:
