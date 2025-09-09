@@ -42,10 +42,19 @@ def run_schedule_mode(
     from datetime import datetime
     from concurrent.futures import ThreadPoolExecutor
 
-    # Prepare output log directory
-    results_dir_path = Path(results_dir)
-    results_dir_path.mkdir(parents=True, exist_ok=True)
-    log_path = results_dir_path / "requests_sent.log"
+    from shutil import copyfile
+
+    # Make timestamped subdir for this run
+    utc_time = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
+    subdir_name = f"{utc_time}_schedule_run"
+    results_subdir_path = Path(results_dir) / subdir_name
+    results_subdir_path.mkdir(parents=True, exist_ok=True)
+
+    # Copy schedule file into subdir for recordkeeping
+    copyfile(schedule_file, results_subdir_path / "schedule.csv")
+
+    # Log file inside subdir
+    log_path = results_subdir_path / "requests_sent.log"
 
     # Prepare tokenizer
     tokenizer = LlamaTokenizerFast.from_pretrained("hf-internal-testing/llama-tokenizer")
@@ -161,6 +170,7 @@ def run_schedule_mode(
         "schedule_file": schedule_file,
         "wall_time_s": end_time - start_time,
     })
+    summary["results_subdir"] = str(results_subdir_path)
 
     return summary, completed_requests
 
@@ -442,16 +452,21 @@ def run_token_benchmark(
             "because of the prompting logic right now."
         )
 
+    # Default results dir
+    results_dir_path = Path(results_dir)
+
     # --- Branching point ---
     if schedule_file:
         print(f"[schedule mode] Using schedule runner. File: {schedule_file}")
         summary, individual_responses = run_schedule_mode(
-        llm_api=llm_api,
-        model=model,
-        schedule_file=schedule_file,
-        results_dir=results_dir,
-        additional_sampling_params=additional_sampling_params,
-    )
+            llm_api=llm_api,
+            model=model,
+            schedule_file=schedule_file,
+            results_dir=results_dir,
+            additional_sampling_params=additional_sampling_params,
+        )
+        # Override results_dir_path with the subdir actually used
+        results_dir_path = Path(summary["results_subdir"])
     else:
         summary, individual_responses = get_token_throughput_latencies(
             model=model,
@@ -478,14 +493,20 @@ def run_token_benchmark(
             summary["schedule_file"] = schedule_file
 
         results = LLMPerfResults(name=summary_filename, metadata=summary)
-        results_dir_path = Path(results_dir)
-        results_dir_path.mkdir(parents=True, exist_ok=True)
 
-        with open(results_dir_path / f"{summary_filename}.json", "w") as f:
-            json.dump(results.to_dict(), f, indent=4, default=str)
+        try:
+            with open(results_dir_path / f"{summary_filename}.json", "w") as f:
+                json.dump(results.to_dict(), f, indent=4, default=str)
+        except Exception as e:
+            print(results.to_dict())
+            raise e
 
-        with open(results_dir_path / f"{individual_responses_filename}.json", "w") as f:
-            json.dump(individual_responses, f, indent=4)
+        try:
+            with open(results_dir_path / f"{individual_responses_filename}.json", "w") as f:
+                json.dump(individual_responses, f, indent=4)
+        except Exception as e:
+            print(individual_responses)
+            raise e
 
 
 args = argparse.ArgumentParser(
