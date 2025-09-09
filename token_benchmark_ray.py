@@ -26,6 +26,145 @@ from tqdm import tqdm
 
 from transformers import LlamaTokenizerFast
 
+def run_schedule_mode(
+        *,
+        llm_api: str,
+        model: str,
+        schedule_file: str,
+        results_dir: str,
+        additional_sampling_params: str,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """
+    Dispatch requests using a schedule file with delta timestamps.
+    Preserves concurrency by launching requests in background threads at their appropriate offsets.
+    """
+    import csv
+    from datetime import datetime
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Prepare output log directory
+    results_dir_path = Path(results_dir)
+    results_dir_path.mkdir(parents=True, exist_ok=True)
+    log_path = results_dir_path / "requests_sent.log"
+
+    # Prepare tokenizer
+    tokenizer = LlamaTokenizerFast.from_pretrained("hf-internal-testing/llama-tokenizer")
+    get_token_length = lambda text: len(tokenizer.encode(text))
+
+    # Read schedule and attach request IDs
+    with open(schedule_file, newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        schedule = []
+        for idx, row in enumerate(reader):
+            schedule.append({
+                "request_id": idx + 1,
+                "scheduled_offset_s": float(row["scheduled_offset_s"]),
+                "input_tokens": int(row["input_tokens"]),
+                "output_tokens": int(row["output_tokens"]),
+            })
+
+    base_time = time.monotonic()
+    t0_utc = time.time()
+    log_fh = open(log_path, "a")
+
+    # Shared results
+    completed_requests = []
+    completed_lock = threading.Lock()
+
+    def launch_and_record(sched: Dict[str, Any]):
+        request_id = sched["request_id"]
+        scheduled_offset = sched["scheduled_offset_s"]
+
+        # Sleep until scheduled time
+        time.sleep(max(0, base_time + scheduled_offset - time.monotonic()))
+
+        dispatch_ts = time.time()
+        dispatch_offset = dispatch_ts - t0_utc
+        dispatch_lag = dispatch_offset - scheduled_offset
+        dispatch_ts_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(dispatch_ts))
+
+        print(f"[request #{request_id}] Dispatching at offset {dispatch_offset:.3f}s "
+              f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
+
+        prompt = randomly_sample_sonnet_lines_prompt(
+            prompt_tokens_mean=sched["input_tokens"],
+            prompt_tokens_stddev=0,
+            expect_output_tokens=sched["output_tokens"],
+            tokenizer=tokenizer
+        )
+
+        default_sampling_params = {"max_tokens": sched["output_tokens"]}
+        default_sampling_params.update(json.loads(additional_sampling_params))
+
+        request_config = RequestConfig(
+            model=model,
+            prompt=prompt,
+            sampling_params=default_sampling_params,
+            llm_api=llm_api,
+        )
+
+        clients = construct_clients(llm_api=llm_api, num_clients=1)
+        req_launcher = RequestsLauncher(clients)
+        req_launcher.launch_requests(request_config)
+
+        outs = req_launcher.get_next_ready()
+        for out in outs:
+            request_metrics, gen_text, _ = out
+            response_ts = time.time()
+            response_offset = response_ts - t0_utc
+            response_ts_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(response_ts))
+
+            print(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
+
+            log_fh.write(json.dumps({
+                "request_id": request_id,
+                "scheduled_offset_s": scheduled_offset,
+                "dispatch_offset_s": dispatch_offset,
+                "dispatch_lag_s": dispatch_lag,
+                "dispatch_ts_utc": dispatch_ts_utc,
+                "response_offset_s": response_offset,
+                "response_ts_utc": response_ts_utc,
+            }) + "\n")
+            log_fh.flush()
+
+            num_output_tokens = get_token_length(gen_text)
+            if num_output_tokens:
+                request_metrics[common_metrics.INTER_TOKEN_LAT] /= num_output_tokens
+            else:
+                request_metrics[common_metrics.INTER_TOKEN_LAT] = 0
+            request_metrics[common_metrics.NUM_OUTPUT_TOKENS] = num_output_tokens
+            request_metrics[common_metrics.NUM_TOTAL_TOKENS] = request_metrics[common_metrics.NUM_INPUT_TOKENS] + num_output_tokens
+            request_metrics[common_metrics.REQ_OUTPUT_THROUGHPUT] = num_output_tokens / request_metrics[common_metrics.E2E_LAT]
+
+            with completed_lock:
+                completed_requests.append(request_metrics)
+
+
+    # Run requests on threads with natural concurrency
+    with ThreadPoolExecutor(max_workers=500) as executor:
+        for sched in schedule:
+            executor.submit(launch_and_record, sched)
+
+    executor.shutdown(wait=True)
+    log_fh.close()
+
+    print(f"\nResults for schedule-mode benchmark for {model} queried with {llm_api} API.\n")
+
+    start_time = base_time
+    end_time = time.monotonic()
+    summary = metrics_summary(completed_requests, start_time, end_time)
+
+    summary.update({
+        "model": model,
+        "num_concurrent_requests": "scheduled",  # Not fixed concurrency
+        "num_launched": len(schedule),
+        "schedule_file": schedule_file,
+        "wall_time_s": end_time - start_time,
+    })
+
+    return summary, completed_requests
+
+
 def get_token_throughput_latencies(
     model: str,
     mean_input_tokens: int,
@@ -64,7 +203,7 @@ def get_token_throughput_latencies(
         "hf-internal-testing/llama-tokenizer"
     )
     get_token_length = lambda text: len(tokenizer.encode(text))
-    
+
     if not additional_sampling_params:
         additional_sampling_params = {}
 
@@ -177,7 +316,7 @@ def get_token_throughput_latencies(
     }
 
     metadata["results"] = ret
-        
+
     return metadata, completed_requests
 
 
@@ -216,7 +355,7 @@ def metrics_summary(
 
     df = pd.DataFrame(metrics)
     df_without_errored_req = df[df[common_metrics.ERROR_CODE].isna()]
-    
+
     for key in [
         common_metrics.INTER_TOKEN_LAT,
         common_metrics.TTFT,
@@ -275,59 +414,57 @@ def metrics_summary(
 
     ret[common_metrics.NUM_COMPLETED_REQUESTS] = num_completed_requests
     ret[common_metrics.COMPLETED_REQUESTS_PER_MIN] = num_completed_requests_per_min
-    
+
     return ret
 
 
 def run_token_benchmark(
-    llm_api: str,
-    model: str,
-    test_timeout_s: int,
-    max_num_completed_requests: int,
-    num_concurrent_requests: int,
-    mean_input_tokens: int,
-    stddev_input_tokens: int,
-    mean_output_tokens: int,
-    stddev_output_tokens: int,
-    additional_sampling_params: str,
-    results_dir: str,
-    user_metadata: Dict[str, Any],
+        llm_api: str,
+        model: str,
+        test_timeout_s: int,
+        max_num_completed_requests: int,
+        num_concurrent_requests: int,
+        mean_input_tokens: int,
+        stddev_input_tokens: int,
+        mean_output_tokens: int,
+        stddev_output_tokens: int,
+        additional_sampling_params: str,
+        results_dir: str,
+        user_metadata: Dict[str, Any],
+        schedule_file: str = "",  # optional; when set we route through the schedule branch
 ):
     """
-    Args:
-        llm_api: The name of the llm api to use.
-        model: The name of the model to query.
-        max_num_completed_requests: The number of requests to complete before finishing the test.
-        test_timeout_s: The amount of time to run the test for before reporting results.
-        num_concurrent_requests: The number of concurrent requests to make. Increase
-            this to increase the amount of load and vice versa.
-        mean_input_tokens: The mean number of tokens to send in the prompt for the request.
-        stddev_input_tokens: The standard deviation of the number of tokens to send in the prompt for the request.
-        mean_output_tokens: The mean number of tokens to generate per request.
-        stddev_output_tokens: The standard deviation of the number of tokens to generate per request.
-        additional_sampling_params: Additional sampling parameters to send with the request.
-            For more information see the LLM APIs documentation for the completions.
-        results_dir: The directory to save the results to.
-        user_metadata: Additional metadata to include in the results.
+    Run either baseline or schedule mode benchmark.
     """
     if mean_input_tokens < 40:
         print(
-            "the minimum number of input tokens that will be sent is 41"
-            " because of the prompting logic right now"
+            "The minimum number of input tokens that will be sent is 41 "
+            "because of the prompting logic right now."
         )
 
-    summary, individual_responses = get_token_throughput_latencies(
-        model=model,
+    # --- Branching point ---
+    if schedule_file:
+        print(f"[schedule mode] Using schedule runner. File: {schedule_file}")
+        summary, individual_responses = run_schedule_mode(
         llm_api=llm_api,
-        test_timeout_s=test_timeout_s,
-        max_num_completed_requests=max_num_completed_requests,
-        mean_input_tokens=mean_input_tokens,
-        stddev_input_tokens=stddev_input_tokens,
-        mean_output_tokens=mean_output_tokens,
-        stddev_output_tokens=stddev_output_tokens,
-        num_concurrent_requests=num_concurrent_requests,
-        additional_sampling_params=json.loads(additional_sampling_params),
+        model=model,
+        schedule_file=schedule_file,
+        results_dir=results_dir,
+        additional_sampling_params=additional_sampling_params,
     )
+    else:
+        summary, individual_responses = get_token_throughput_latencies(
+            model=model,
+            llm_api=llm_api,
+            test_timeout_s=test_timeout_s,
+            max_num_completed_requests=max_num_completed_requests,
+            mean_input_tokens=mean_input_tokens,
+            stddev_input_tokens=stddev_input_tokens,
+            mean_output_tokens=mean_output_tokens,
+            stddev_output_tokens=stddev_output_tokens,
+            num_concurrent_requests=num_concurrent_requests,
+            additional_sampling_params=json.loads(additional_sampling_params),
+        )
 
     if results_dir:
         filename = f"{model}_{mean_input_tokens}_{mean_output_tokens}"
@@ -336,29 +473,19 @@ def run_token_benchmark(
         summary_filename = f"{filename}_summary"
         individual_responses_filename = f"{filename}_individual_responses"
 
-        # Update to metadata.
         summary.update(user_metadata)
+        if schedule_file:
+            summary["schedule_file"] = schedule_file
 
         results = LLMPerfResults(name=summary_filename, metadata=summary)
-        results_dir = Path(results_dir)
-        if not results_dir.exists():
-            results_dir.mkdir(parents=True)
-        elif not results_dir.is_dir():
-            raise ValueError(f"{results_dir} is not a directory")
+        results_dir_path = Path(results_dir)
+        results_dir_path.mkdir(parents=True, exist_ok=True)
 
-        try:
-            with open(results_dir / f"{summary_filename}.json", "w") as f:
-                json.dump(results.to_dict(), f, indent=4, default=str)
-        except Exception as e:
-            print(results.to_dict())
-            raise e
+        with open(results_dir_path / f"{summary_filename}.json", "w") as f:
+            json.dump(results.to_dict(), f, indent=4, default=str)
 
-        try:
-            with open(results_dir / f"{individual_responses_filename}.json", "w") as f:
-                json.dump(individual_responses, f, indent=4)
-        except Exception as e:
-            print(individual_responses)
-            raise e
+        with open(results_dir_path / f"{individual_responses_filename}.json", "w") as f:
+            json.dump(individual_responses, f, indent=4)
 
 
 args = argparse.ArgumentParser(
@@ -478,32 +605,55 @@ args.add_argument(
 if __name__ == "__main__":
     env_vars = dict(os.environ)
     ray.init(runtime_env={"env_vars": env_vars})
-    args = args.parse_args()
+    args = argparse.ArgumentParser(
+        description="Run a token throughput and latency benchmark."
+    )
 
-    # Parse user metadata.
+    args.add_argument("--model", type=str, required=True)
+    args.add_argument("--mean-input-tokens", type=int, default=550)
+    args.add_argument("--stddev-input-tokens", type=int, default=150)
+    args.add_argument("--mean-output-tokens", type=int, default=150)
+    args.add_argument("--stddev-output-tokens", type=int, default=80)
+    args.add_argument("--num-concurrent-requests", type=int, default=10)
+    args.add_argument("--timeout", type=int, default=90)
+    args.add_argument("--max-num-completed-requests", type=int, default=10)
+    args.add_argument("--additional-sampling-params", type=str, default="{}")
+    args.add_argument("--results-dir", type=str, default="")
+    args.add_argument("--llm-api", type=str, default="openai")
+    args.add_argument("--metadata", type=str, default="")
+    args.add_argument(
+        "--schedule-file",
+        type=str,
+        default="",
+        help="Optional CSV with rows: delta_from_t0,input_tokens,output_tokens. Enables schedule mode.",
+    )
+
+    parsed = args.parse_args()
+
+    # Metadata
     user_metadata = {}
-    if args.metadata:
-        for item in args.metadata.split(","):
+    if parsed.metadata:
+        for item in parsed.metadata.split(","):
             key, value = item.split("=")
             user_metadata[key] = value
 
-    # If a schedule file is provided, per spec: ignore stddevs (force to 0).
-    if args.schedule_file:
-        args.stddev_input_tokens = 0
-        args.stddev_output_tokens = 0
+    # Force stddevs to 0 when using --schedule-file
+    if parsed.schedule_file:
+        parsed.stddev_input_tokens = 0
+        parsed.stddev_output_tokens = 0
 
     run_token_benchmark(
-        llm_api=args.llm_api,
-        model=args.model,
-        test_timeout_s=args.timeout,
-        max_num_completed_requests=args.max_num_completed_requests,
-        mean_input_tokens=args.mean_input_tokens,
-        stddev_input_tokens=args.stddev_input_tokens,
-        mean_output_tokens=args.mean_output_tokens,
-        stddev_output_tokens=args.stddev_output_tokens,
-        num_concurrent_requests=args.num_concurrent_requests,
-        additional_sampling_params=args.additional_sampling_params,
-        results_dir=args.results_dir,
+        llm_api=parsed.llm_api,
+        model=parsed.model,
+        test_timeout_s=parsed.timeout,
+        max_num_completed_requests=parsed.max_num_completed_requests,
+        mean_input_tokens=parsed.mean_input_tokens,
+        stddev_input_tokens=parsed.stddev_input_tokens,
+        mean_output_tokens=parsed.mean_output_tokens,
+        stddev_output_tokens=parsed.stddev_output_tokens,
+        num_concurrent_requests=parsed.num_concurrent_requests,
+        additional_sampling_params=parsed.additional_sampling_params,
+        results_dir=parsed.results_dir,
         user_metadata=user_metadata,
+        schedule_file=parsed.schedule_file,
     )
-
