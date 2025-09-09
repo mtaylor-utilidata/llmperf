@@ -98,9 +98,11 @@ def run_schedule_mode(
         # Sleep until scheduled time
         time.sleep(max(0, base_time + scheduled_offset - time.monotonic()))
 
-        dispatch_ts = time.time()
-        dispatch_offset = dispatch_ts - t0_utc
+        dispatch_ts_mono = time.monotonic()
+        dispatch_offset = dispatch_ts_mono - base_time
         dispatch_lag = dispatch_offset - scheduled_offset
+
+        dispatch_ts = time.time()
         dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
 
         print(f"[request #{request_id}] Dispatching at offset {dispatch_offset:.3f}s "
