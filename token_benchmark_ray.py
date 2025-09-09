@@ -84,17 +84,7 @@ def run_schedule_mode(
         request_id = sched["request_id"]
         scheduled_offset = sched["scheduled_offset_s"]
 
-        # Sleep until scheduled time
-        time.sleep(max(0, base_time + scheduled_offset - time.monotonic()))
-
-        dispatch_ts = time.time()
-        dispatch_offset = dispatch_ts - t0_utc
-        dispatch_lag = dispatch_offset - scheduled_offset
-        dispatch_ts_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(dispatch_ts))
-
-        print(f"[request #{request_id}] Dispatching at offset {dispatch_offset:.3f}s "
-              f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
-
+        # Prepare everything we can *before* waiting
         prompt = randomly_sample_sonnet_lines_prompt(
             prompt_tokens_mean=sched["input_tokens"],
             prompt_tokens_stddev=0,
@@ -104,6 +94,17 @@ def run_schedule_mode(
 
         default_sampling_params = {"max_tokens": sched["output_tokens"]}
         default_sampling_params.update(json.loads(additional_sampling_params))
+
+        # Sleep until scheduled time
+        time.sleep(max(0, base_time + scheduled_offset - time.monotonic()))
+
+        dispatch_ts = time.time()
+        dispatch_offset = dispatch_ts - t0_utc
+        dispatch_lag = dispatch_offset - scheduled_offset
+        dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
+
+        print(f"[request #{request_id}] Dispatching at offset {dispatch_offset:.3f}s "
+              f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
 
         request_config = RequestConfig(
             model=model,
@@ -121,17 +122,17 @@ def run_schedule_mode(
             request_metrics, gen_text, _ = out
             response_ts = time.time()
             response_offset = response_ts - t0_utc
-            response_ts_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(response_ts))
+            response_ts_utc = datetime.utcfromtimestamp(response_ts).isoformat(timespec="milliseconds") + "Z"
 
             print(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
 
             log_fh.write(json.dumps({
                 "request_id": request_id,
                 "scheduled_offset_s": scheduled_offset,
-                "dispatch_offset_s": dispatch_offset,
-                "dispatch_lag_s": dispatch_lag,
+                "dispatch_offset_s": round(dispatch_offset, 3),
+                "dispatch_lag_s": round(dispatch_lag, 3),
                 "dispatch_ts_utc": dispatch_ts_utc,
-                "response_offset_s": response_offset,
+                "response_offset_s": round(response_offset, 3),
                 "response_ts_utc": response_ts_utc,
             }) + "\n")
             log_fh.flush()
