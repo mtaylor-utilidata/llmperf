@@ -60,6 +60,8 @@ def run_schedule_mode(
     completed_requests = []
     completed_lock = threading.Lock()
 
+    log_lock = threading.Lock()
+
     # Launch all threads using natural concurrency
     with ThreadPoolExecutor(max_workers=500) as executor:
         for sched in schedule:
@@ -75,6 +77,7 @@ def run_schedule_mode(
                 get_token_length,
                 completed_requests,
                 completed_lock,
+                log_lock,
                 log_fh,
             )
 
@@ -130,6 +133,7 @@ def _launch_and_record_scheduled(
         get_token_length,
         completed_requests: List[Dict[str, Any]],
         completed_lock: threading.Lock,
+        log_lock: threading.Lock,
         log_fh,
 ):
     request_id = sched["request_id"]
@@ -182,16 +186,17 @@ def _launch_and_record_scheduled(
 
         print(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
 
-        log_fh.write(json.dumps({
-            "request_id": request_id,
-            "scheduled_offset_s": scheduled_offset,
-            "dispatch_offset_s": round(dispatch_offset, 3),
-            "dispatch_lag_s": round(dispatch_lag, 3),
-            "dispatch_ts_utc": dispatch_ts_utc,
-            "response_offset_s": round(response_offset, 3),
-            "response_ts_utc": response_ts_utc,
-        }) + "\n")
-        log_fh.flush()
+        with log_lock:
+            log_fh.write(json.dumps({
+                "request_id": request_id,
+                "scheduled_offset_s": scheduled_offset,
+                "dispatch_offset_s": round(dispatch_offset, 3),
+                "dispatch_lag_s": round(dispatch_lag, 3),
+                "dispatch_ts_utc": dispatch_ts_utc,
+                "response_offset_s": round(response_offset, 3),
+                "response_ts_utc": response_ts_utc,
+            }) + "\n")
+            log_fh.flush()
 
         # Metric augmentation
         num_output_tokens = get_token_length(gen_text)
