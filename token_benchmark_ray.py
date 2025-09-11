@@ -53,7 +53,7 @@ def run_schedule_mode(
     schedule = _load_schedule(schedule_file)
 
     # Record base times
-    base_time = time.monotonic()
+    start_time_mono = time.monotonic() + 3  # slight delay to prep threads
     t0_utc = time.time()
 
     # Thread-safe collection of completed request metrics
@@ -68,7 +68,7 @@ def run_schedule_mode(
             executor.submit(
                 _launch_and_record_scheduled,
                 sched,
-                base_time,
+                start_time_mono,
                 t0_utc,
                 model,
                 llm_api,
@@ -87,14 +87,14 @@ def run_schedule_mode(
 
     print(f"\nResults for schedule-mode benchmark for {model} queried with {llm_api} API.\n")
 
-    summary = metrics_summary(completed_requests, base_time, time.monotonic())
+    summary = metrics_summary(completed_requests, start_time_mono, time.monotonic())
     summary.update({
         "model": model,
         "num_concurrent_requests": "scheduled",
         "num_launched": len(schedule),
         "schedule_file": schedule_file,
         "results_subdir": str(results_subdir_path),
-        "wall_time_s": time.monotonic() - base_time,
+        "wall_time_s": time.monotonic() - start_time_mono,
     })
 
     return summary, completed_requests
@@ -124,7 +124,7 @@ def _load_schedule(schedule_file: str) -> List[Dict[str, Any]]:
 
 def _launch_and_record_scheduled(
         sched: Dict[str, Any],
-        base_time: float,
+        start_time_mono: float,
         t0_utc: float,
         model: str,
         llm_api: str,
@@ -140,7 +140,7 @@ def _launch_and_record_scheduled(
     scheduled_offset = sched["scheduled_offset_s"]
 
     # Sleep until 1s before scheduled time to prep work
-    time.sleep(max(0, base_time + scheduled_offset - time.monotonic() - 1.0))
+    time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - 0.1))
 
     # Prepare request inputs and configs
     prompt = randomly_sample_sonnet_lines_prompt(
@@ -163,12 +163,12 @@ def _launch_and_record_scheduled(
     req_launcher = RequestsLauncher(clients)
 
     # Final sleep until scheduled time
-    time.sleep(max(0, base_time + scheduled_offset - time.monotonic()))
+    time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
 
     # Launch and record dispatch
     req_launcher.launch_requests(request_config)
     dispatch_ts_mono = time.monotonic()
-    dispatch_offset = dispatch_ts_mono - base_time
+    dispatch_offset = dispatch_ts_mono - start_time_mono
     dispatch_lag = dispatch_offset - scheduled_offset
     dispatch_ts = time.time()
     dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
