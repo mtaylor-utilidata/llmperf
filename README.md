@@ -29,6 +29,82 @@ Where the lines are randomly sampled from a collection of lines from Shakespeare
 
 To run the most basic load test you can the token_benchmark_ray script.
 
+---
+
+## Schedule Mode
+
+You can optionally run the benchmark using a **CSV schedule file**. This file specifies exact dispatch times in an offset from `t0.00`, and token counts for each request. When this mode is enabled via `--schedule-file`, other token and concurrency-related arguments are **ignored**.
+
+### Schedule file format
+
+The CSV should include:
+
+```
+scheduled_offset_s,input_tokens,output_tokens
+0.000,600,200
+0.050,550,150
+0.100,500,100
+...
+```
+
+Each row corresponds to a single request:
+- `scheduled_offset_s`: how many seconds after t=0 to launch the request
+- `input_tokens`: number of tokens in the prompt
+- `output_tokens`: number of tokens to generate
+
+## Ignored Parameters in Schedule Mode
+
+When you provide `--schedule-file`, several other arguments become irrelevant, since the test configuration is fully driven by the schedule file.
+
+The following arguments are **ignored** when `--schedule-file` is set:
+
+- `--mean-input-tokens`
+- `--stddev-input-tokens`
+- `--mean-output-tokens`
+- `--stddev-output-tokens`
+- `--num-concurrent-requests`
+- `--timeout`
+- `--max-num-completed-requests`
+
+If any of these arguments are set to non-default values while `--schedule-file` is used, the script will emit a warning to clarify they are being ignored.
+
+---
+
+## Example Call with Schedule File
+
+``​`bash
+python token_benchmark_ray.py \
+  --model "meta-llama/Llama-2-7b-chat-hf" \
+  --schedule-file "schedules/bursty_schedule.csv" \
+  --results-dir "result_outputs" \
+  --llm-api "openai" \
+  --additional-sampling-params '{}'
+``​`
+
+This will:
+- Launch requests according to the timestamps in `bursty_schedule.csv`
+- Save logs and results in a timestamped subdirectory of `result_outputs`
+- Record per-request dispatch and response timing in `requests_sent.log`
+- Copy the schedule file into the results directory for traceability
+
+### Notes
+
+- Requests are dispatched in separate threads to maintain natural concurrency.
+- Prompt templates and token counting still use the Llama tokenizer.
+- This mode is useful for replaying or modeling bursty traffic patterns.
+
+### Output
+
+When using `--schedule-file`, results are saved in a **timestamped subdirectory** inside `--results-dir`. That subdirectory contains:
+- `summary.json`: performance metrics summary
+- `individual_responses.json`: per-request metrics
+- `requests_sent.log`: exact dispatch/response times and lag
+- `schedule.csv`: copy of the schedule file used
+
+You will see a warning if you supply arguments that will be ignored in schedule mode (e.g. `--stddev-input-tokens`, `--timeout`, etc.).
+
+---
+
 
 ### Caveats and Disclaimers
 
