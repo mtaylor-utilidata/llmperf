@@ -36,13 +36,22 @@ def run_schedule_mode(
         schedule_file: str,
         results_dir: str,
         additional_sampling_params: str,
+        use_subdir: bool = True,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """
     Dispatch requests using a schedule file with delta timestamps.
     Preserves concurrency by launching requests in background threads at their appropriate offsets.
     """
+    # Determine whether to use a subdirectory for results
+    if use_subdir:
+        results_subdir_path = _prepare_results_subdir(results_dir, schedule_file)
+    else:
+        results_subdir_path = Path(results_dir)
+
+    # Copy schedule file to results directory for reference
+    copyfile(schedule_file, results_subdir_path / "schedule.csv")
+
     # Create output directory and copy schedule file
-    results_subdir_path = _prepare_results_subdir(results_dir, schedule_file)
     log_fh = open(results_subdir_path / "requests_sent.log", "a")
 
     # Load tokenizer
@@ -100,12 +109,11 @@ def run_schedule_mode(
     return summary, completed_requests
 
 def _prepare_results_subdir(results_dir: str, schedule_file: str) -> Path:
-    """Creates a timestamped subdirectory and copies the schedule file."""
+    """Creates a timestamped subdirectory"""
     utc_time = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
     subdir_name = f"{utc_time}_schedule_run"
     results_subdir_path = Path(results_dir) / subdir_name
     results_subdir_path.mkdir(parents=True, exist_ok=True)
-    copyfile(schedule_file, results_subdir_path / "schedule.csv")
     return results_subdir_path
 
 def _load_schedule(schedule_file: str) -> List[Dict[str, Any]]:
@@ -173,7 +181,7 @@ def _launch_and_record_scheduled(
     dispatch_ts = time.time()
     dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
 
-    print(f"[request #{request_id}] Dispatched at offset {dispatch_offset:.3f}s "
+    print(f"[request #{request_id}] Dispatch confirmed at offset {dispatch_offset:.3f}s "
           f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
 
     outs = req_launcher.get_next_ready()
@@ -479,7 +487,8 @@ def run_token_benchmark(
     additional_sampling_params: str,
     results_dir: str,
     user_metadata: Dict[str, Any],
-    schedule_file: str = "",  # optional; when set we route through the schedule branch
+    schedule_file: str = "", # optional; when set we route through the schedule branch
+    schedule_file_subdir: bool = True
 ):
     """
     Args:
@@ -516,6 +525,7 @@ def run_token_benchmark(
             schedule_file=schedule_file,
             results_dir=results_dir,
             additional_sampling_params=additional_sampling_params,
+            use_subdir=schedule_file_subdir
         )
 
         # Update to summary.
@@ -689,6 +699,16 @@ args.add_argument(
 )
 
 args.add_argument(
+    "--schedule-file-subdir",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help=(
+        "Whether to place scheduled output files in a subdirectory named after the schedule file "
+        "(default: True). Use --no-schedule-file-subdir to disable."
+    ),
+)
+
+args.add_argument(
     "--schedule-file",
     type=str,
     default="",
@@ -712,8 +732,8 @@ if __name__ == "__main__":
 
     if args.schedule_file:
         IGNORED_ARGS_IN_SCHEDULE_MODE = {
-            "--stddev-input-tokens": args.stddev_input_tokens != 0,
-            "--stddev-output-tokens": args.stddev_output_tokens != 0,
+            "--stddev-input-tokens": args.stddev_input_tokens != 150,
+            "--stddev-output-tokens": args.stddev_output_tokens != 80,
             "--num-concurrent-requests": args.num_concurrent_requests != 10,
             "--timeout": args.timeout != 90,
             "--max-num-completed-requests": args.max_num_completed_requests != 10,
@@ -741,4 +761,5 @@ if __name__ == "__main__":
         results_dir=args.results_dir,
         user_metadata=user_metadata,
         schedule_file=args.schedule_file,
+        schedule_file_subdir=args.schedule_file_subdir
     )
