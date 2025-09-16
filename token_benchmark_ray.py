@@ -545,7 +545,7 @@ def run_token_benchmark(
             raise e
 
         try:
-            with open(results_dir_path / "_individual_responses.json", "w") as f:
+            with open(results_dir_path / "individual_responses.json", "w") as f:
                 json.dump(individual_responses, f, indent=4)
         except Exception as e:
             print(individual_responses)
