@@ -193,6 +193,7 @@ def _launch_and_record_scheduled(
     # --- Acquire a launcher from the pool ---
     req_launcher = launcher_pool.get()
 
+    launcher_released = False
     try:
         # Launch and record dispatch
         req_launcher.launch_requests(request_config)
@@ -207,6 +208,11 @@ def _launch_and_record_scheduled(
 
         # Collect response(s) for this launcher
         outs = req_launcher.get_next_ready()
+
+        # --- Release launcher immediately after responses are collected ---
+        launcher_pool.put(req_launcher)
+        launcher_released = True
+
         for out in outs:
             request_metrics, gen_text, _ = out
 
@@ -247,7 +253,8 @@ def _launch_and_record_scheduled(
 
     finally:
         # --- Always return the launcher to the pool ---
-        launcher_pool.put(req_launcher)
+        if not launcher_released:
+            launcher_pool.put(req_launcher)
 
 
 
