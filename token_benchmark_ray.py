@@ -75,7 +75,7 @@ def run_schedule_mode(
     log_lock = threading.Lock()
 
     # Launch all threads using natural concurrency
-    with ThreadPoolExecutor(max_workers=500) as executor:
+    with ThreadPoolExecutor(max_workers=1000) as executor:
         for sched in schedule:
             executor.submit(
                 _launch_and_record_scheduled,
