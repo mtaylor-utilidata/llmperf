@@ -56,13 +56,41 @@ def upload_to_s3(results_path: str, s3_path: str) -> None:
         print(result.stderr)
 
 
+# Globals for caching
+SONNET_LINES = []
+SONNET_TOKENS = []   # tokenized version of each line
+SONNET_TOKEN_COUNTS = []   # precomputed lengths
+
+
+def preload_sonnet(tokenizer):
+    """
+    Preload Shakespeare sonnet lines and their tokenizations into memory.
+
+    Args:
+        tokenizer: HuggingFace tokenizer.
+    """
+    global SONNET_LINES, SONNET_TOKENS, SONNET_TOKEN_COUNTS
+
+    if SONNET_LINES:  # already loaded
+        return
+
+    sonnet_path = pathlib.Path(__file__).parent.resolve() / "sonnet.txt"
+    with open(sonnet_path, "r", encoding="utf-8") as f:
+        SONNET_LINES = f.readlines()
+
+    SONNET_TOKENS = [tokenizer.encode(line) for line in SONNET_LINES]
+    SONNET_TOKEN_COUNTS = [len(tokens) for tokens in SONNET_TOKENS]
+
+
 def build_scheduled_sonnet_prompt(
         input_tokens: int,
         output_tokens: int,
         tokenizer,
 ) -> Tuple[str, int]:
     """
-    Build a prompt of exactly `input_tokens` using preloaded Shakespeare sonnet lines.
+    Build a prompt of exactly `input_tokens` tokens using preloaded
+    Shakespeare sonnet lines. Matches the signature of
+    randomly_sample_sonnet_lines_prompt for drop-in replacement.
 
     Args:
         input_tokens: Desired number of input tokens (from schedule).
@@ -72,7 +100,7 @@ def build_scheduled_sonnet_prompt(
     Returns:
         Tuple[str, int]: Prompt string and token count.
     """
-    global SONNET_LINES, SONNET_TOKENS
+    global SONNET_LINES, SONNET_TOKENS, SONNET_TOKEN_COUNTS
 
     if not SONNET_LINES:
         preload_sonnet(tokenizer)
@@ -92,7 +120,7 @@ def build_scheduled_sonnet_prompt(
         )
 
     remaining = input_tokens - base_tokens
-    prompt = [base_prompt]
+    prompt_parts = [base_prompt]
     total_tokens = base_tokens
 
     # Shuffle once per request (indexes, not strings)
@@ -100,18 +128,30 @@ def build_scheduled_sonnet_prompt(
     random.shuffle(idxs)
 
     for i in idxs:
-        line, line_tokens = SONNET_LINES[i], SONNET_TOKENS[i]
-        if remaining - line_tokens < 0:
-            # Add just enough chars to hit target
-            cutoff = int(math.ceil(remaining / (line_tokens / len(line))))
-            prompt.append(line[:cutoff])
-            total_tokens += remaining
+        if remaining <= 0:
             break
-        prompt.append(line)
+
+        line, tokens, line_tokens = (
+            SONNET_LINES[i],
+            SONNET_TOKENS[i],
+            SONNET_TOKEN_COUNTS[i],
+        )
+
+        if line_tokens > remaining:
+            # Truncate safely by tokens
+            truncated = tokens[:remaining]
+            prompt_parts.append(tokenizer.decode(truncated))
+            total_tokens += len(truncated)
+            remaining = 0
+            break
+
+        # Take whole line
+        prompt_parts.append(line)
         remaining -= line_tokens
         total_tokens += line_tokens
 
-    return "".join(prompt), total_tokens
+    return "".join(prompt_parts), total_tokens
+
 
 
 def randomly_sample_sonnet_lines_prompt(
