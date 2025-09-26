@@ -187,6 +187,8 @@ def _launch_and_record_scheduled(
         llm_api=llm_api,
     )
 
+    safe_print(f"[request #{request_id}] Request prep completed with duration {prep_end - prep_start:.3f}s")
+
     # Final sleep until scheduled time
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
 
