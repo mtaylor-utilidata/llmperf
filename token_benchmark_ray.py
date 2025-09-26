@@ -30,6 +30,14 @@ from llmperf.utils import (
     sample_random_positive_int,
 )
 
+# Global lock for stdout
+_print_lock = threading.Lock()
+
+def safe_print(*args, **kwargs):
+    """Thread-safe print to stdout."""
+    with _print_lock:
+        print(*args, **kwargs, flush=True)
+
 def run_schedule_mode(
         *,
         llm_api: str,
@@ -194,7 +202,7 @@ def _launch_and_record_scheduled(
         dispatch_ts = time.time()
         dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
 
-        print(f"[request #{request_id}] Dispatch confirmed at offset {dispatch_offset:.3f}s "
+        safe_print(f"[request #{request_id}] Dispatch confirmed at offset {dispatch_offset:.3f}s "
               f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
 
         # Collect response(s) for this launcher
@@ -206,7 +214,7 @@ def _launch_and_record_scheduled(
             response_offset = response_ts - t0_utc
             response_ts_utc = datetime.utcfromtimestamp(response_ts).isoformat(timespec="milliseconds") + "Z"
 
-            print(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
+            safe_print(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
 
             # Log to file
             with log_lock:
