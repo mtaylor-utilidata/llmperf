@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from shutil import copyfile
 from typing import Any, Dict, List, Optional, Tuple
+from queue import Queue
 
 import pandas as pd
 import ray
@@ -61,8 +62,14 @@ def run_schedule_mode(
     # Read and parse the schedule CSV
     schedule = _load_schedule(schedule_file)
 
-    clients = construct_clients(llm_api=llm_api, num_clients=min(700, len(schedule)))
-    req_launcher = RequestsLauncher(clients)
+
+    # Build a pool of launchers, each with its own Ray client
+    # Cap launchers at 700 or total requests, whichever is smaller
+    num_launchers = min(700, len(schedule))
+    launcher_pool = Queue()
+    for _ in range(num_launchers):
+        clients = construct_clients(llm_api=llm_api, num_clients=1)
+        launcher_pool.put(RequestsLauncher(clients))
 
     # Record base times
     start_time_mono = time.monotonic() + 3  # slight delay to prep threads
@@ -91,7 +98,7 @@ def run_schedule_mode(
                 completed_lock,
                 log_lock,
                 log_fh,
-                req_launcher
+                launcher_pool
             )
 
     # Wait for all threads to complete and clean up
@@ -147,12 +154,12 @@ def _launch_and_record_scheduled(
         completed_lock: threading.Lock,
         log_lock: threading.Lock,
         log_fh,
-        req_launcher: RequestsLauncher,
+        launcher_pool,   # <-- pool of RequestsLauncher
 ):
     request_id = sched["request_id"]
     scheduled_offset = sched["scheduled_offset_s"]
 
-    # Sleep until 1s before scheduled time to prep work
+    # Sleep until ~0.1s before scheduled time to prep work
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - 0.1))
 
     # Prepare request inputs and configs
@@ -175,52 +182,65 @@ def _launch_and_record_scheduled(
     # Final sleep until scheduled time
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
 
-    # Launch and record dispatch
-    req_launcher.launch_requests(request_config)
-    dispatch_ts_mono = time.monotonic()
-    dispatch_offset = dispatch_ts_mono - start_time_mono
-    dispatch_lag = dispatch_offset - scheduled_offset
-    dispatch_ts = time.time()
-    dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
+    # --- Acquire a launcher from the pool ---
+    req_launcher = launcher_pool.get()
 
-    print(f"[request #{request_id}] Dispatch confirmed at offset {dispatch_offset:.3f}s "
-          f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
+    try:
+        # Launch and record dispatch
+        req_launcher.launch_requests(request_config)
+        dispatch_ts_mono = time.monotonic()
+        dispatch_offset = dispatch_ts_mono - start_time_mono
+        dispatch_lag = dispatch_offset - scheduled_offset
+        dispatch_ts = time.time()
+        dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
 
-    outs = req_launcher.get_next_ready()
-    for out in outs:
-        request_metrics, gen_text, _ = out
+        print(f"[request #{request_id}] Dispatch confirmed at offset {dispatch_offset:.3f}s "
+              f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
 
-        response_ts = time.time()
-        response_offset = response_ts - t0_utc
-        response_ts_utc = datetime.utcfromtimestamp(response_ts).isoformat(timespec="milliseconds") + "Z"
+        # Collect response(s) for this launcher
+        outs = req_launcher.get_next_ready()
+        for out in outs:
+            request_metrics, gen_text, _ = out
 
-        print(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
+            response_ts = time.time()
+            response_offset = response_ts - t0_utc
+            response_ts_utc = datetime.utcfromtimestamp(response_ts).isoformat(timespec="milliseconds") + "Z"
 
-        with log_lock:
-            log_fh.write(json.dumps({
-                "request_id": request_id,
-                "scheduled_offset_s": scheduled_offset,
-                "dispatch_offset_s": round(dispatch_offset, 3),
-                "dispatch_lag_s": round(dispatch_lag, 3),
-                "dispatch_ts_utc": dispatch_ts_utc,
-                "response_offset_s": round(response_offset, 3),
-                "response_ts_utc": response_ts_utc,
-            }) + "\n")
-            log_fh.flush()
+            print(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
 
-        # Metric augmentation
-        num_output_tokens = get_token_length(gen_text)
-        request_metrics[common_metrics.INTER_TOKEN_LAT] = (
-            request_metrics[common_metrics.INTER_TOKEN_LAT] / num_output_tokens if num_output_tokens else 0
-        )
-        request_metrics[common_metrics.NUM_OUTPUT_TOKENS] = num_output_tokens
-        request_metrics[common_metrics.NUM_TOTAL_TOKENS] = request_metrics[common_metrics.NUM_INPUT_TOKENS] + num_output_tokens
-        request_metrics[common_metrics.REQ_OUTPUT_THROUGHPUT] = (
-                num_output_tokens / request_metrics[common_metrics.E2E_LAT]
-        )
+            # Log to file
+            with log_lock:
+                log_fh.write(json.dumps({
+                    "request_id": request_id,
+                    "scheduled_offset_s": scheduled_offset,
+                    "dispatch_offset_s": round(dispatch_offset, 3),
+                    "dispatch_lag_s": round(dispatch_lag, 3),
+                    "dispatch_ts_utc": dispatch_ts_utc,
+                    "response_offset_s": round(response_offset, 3),
+                    "response_ts_utc": response_ts_utc,
+                }) + "\n")
+                log_fh.flush()
 
-        with completed_lock:
-            completed_requests.append(request_metrics)
+            # Metric augmentation
+            num_output_tokens = get_token_length(gen_text)
+            request_metrics[common_metrics.INTER_TOKEN_LAT] = (
+                request_metrics[common_metrics.INTER_TOKEN_LAT] / num_output_tokens if num_output_tokens else 0
+            )
+            request_metrics[common_metrics.NUM_OUTPUT_TOKENS] = num_output_tokens
+            request_metrics[common_metrics.NUM_TOTAL_TOKENS] = (
+                    request_metrics[common_metrics.NUM_INPUT_TOKENS] + num_output_tokens
+            )
+            request_metrics[common_metrics.REQ_OUTPUT_THROUGHPUT] = (
+                    num_output_tokens / request_metrics[common_metrics.E2E_LAT]
+            )
+
+            with completed_lock:
+                completed_requests.append(request_metrics)
+
+    finally:
+        # --- Always return the launcher to the pool ---
+        launcher_pool.put(req_launcher)
+
 
 
 def get_token_throughput_latencies(

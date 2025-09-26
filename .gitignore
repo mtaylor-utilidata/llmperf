@@ -242,6 +242,7 @@ dist/
 output/
 *.json
 result_outputs/
+schedule_files/
 
 __pycache__
 **/__pycache__/
