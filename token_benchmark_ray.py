@@ -61,6 +61,9 @@ def run_schedule_mode(
     # Read and parse the schedule CSV
     schedule = _load_schedule(schedule_file)
 
+    clients = construct_clients(llm_api=llm_api, num_clients=min(700, len(schedule)))
+    req_launcher = RequestsLauncher(clients)
+
     # Record base times
     start_time_mono = time.monotonic() + 3  # slight delay to prep threads
     t0_utc = time.time()
@@ -88,6 +91,7 @@ def run_schedule_mode(
                 completed_lock,
                 log_lock,
                 log_fh,
+                req_launcher
             )
 
     # Wait for all threads to complete and clean up
@@ -143,6 +147,7 @@ def _launch_and_record_scheduled(
         completed_lock: threading.Lock,
         log_lock: threading.Lock,
         log_fh,
+        req_launcher: RequestsLauncher,
 ):
     request_id = sched["request_id"]
     scheduled_offset = sched["scheduled_offset_s"]
@@ -166,9 +171,6 @@ def _launch_and_record_scheduled(
         sampling_params=sampling_params,
         llm_api=llm_api,
     )
-
-    clients = construct_clients(llm_api=llm_api, num_clients=1)
-    req_launcher = RequestsLauncher(clients)
 
     # Final sleep until scheduled time
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
