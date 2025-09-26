@@ -26,6 +26,7 @@ from llmperf.models import RequestConfig
 from llmperf.requests_launcher import RequestsLauncher
 from llmperf.utils import (
     randomly_sample_sonnet_lines_prompt,
+    build_scheduled_sonnet_prompt,
     LLMPerfResults,
     sample_random_positive_int,
 )
@@ -167,16 +168,15 @@ def _launch_and_record_scheduled(
     request_id = sched["request_id"]
     scheduled_offset = sched["scheduled_offset_s"]
 
-    # Sleep until ~0.1s before scheduled time to prep work
+    # Sleep until ~10s before scheduled time to prep work
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - 10))  #10s prep buffer #todo: change this eventually to max(0.5s, observed_p95_prep_time)
     prep_start = time.monotonic()
 
 
     # Prepare request inputs and configs
-    prompt = randomly_sample_sonnet_lines_prompt(
-        prompt_tokens_mean=sched["input_tokens"],
-        prompt_tokens_stddev=0,
-        expect_output_tokens=sched["output_tokens"],
+    prompt = build_scheduled_sonnet_prompt(
+        input_tokens=sched["input_tokens"],
+        output_tokens=sched["output_tokens"],
         tokenizer=tokenizer
     )
     sampling_params = {"max_tokens": sched["output_tokens"]}

@@ -56,6 +56,64 @@ def upload_to_s3(results_path: str, s3_path: str) -> None:
         print(result.stderr)
 
 
+def build_scheduled_sonnet_prompt(
+        input_tokens: int,
+        output_tokens: int,
+        tokenizer,
+) -> Tuple[str, int]:
+    """
+    Build a prompt of exactly `input_tokens` using preloaded Shakespeare sonnet lines.
+
+    Args:
+        input_tokens: Desired number of input tokens (from schedule).
+        output_tokens: Desired number of output tokens (from schedule).
+        tokenizer: HuggingFace tokenizer (preloaded).
+
+    Returns:
+        Tuple[str, int]: Prompt string and token count.
+    """
+    global SONNET_LINES, SONNET_TOKENS
+
+    if not SONNET_LINES:
+        preload_sonnet(tokenizer)
+
+    # Base text
+    base_prompt = (
+        "Randomly stream lines from the following text "
+        f"with {output_tokens} output tokens. "
+        "Don't generate eos tokens:\n\n"
+    )
+    base_tokens = len(tokenizer.encode(base_prompt))
+
+    if input_tokens < base_tokens:
+        raise ValueError(
+            f"Requested input_tokens={input_tokens} is too small; "
+            f"needs at least {base_tokens}"
+        )
+
+    remaining = input_tokens - base_tokens
+    prompt = [base_prompt]
+    total_tokens = base_tokens
+
+    # Shuffle once per request (indexes, not strings)
+    idxs = list(range(len(SONNET_LINES)))
+    random.shuffle(idxs)
+
+    for i in idxs:
+        line, line_tokens = SONNET_LINES[i], SONNET_TOKENS[i]
+        if remaining - line_tokens < 0:
+            # Add just enough chars to hit target
+            cutoff = int(math.ceil(remaining / (line_tokens / len(line))))
+            prompt.append(line[:cutoff])
+            total_tokens += remaining
+            break
+        prompt.append(line)
+        remaining -= line_tokens
+        total_tokens += line_tokens
+
+    return "".join(prompt), total_tokens
+
+
 def randomly_sample_sonnet_lines_prompt(
     prompt_tokens_mean: int = 550,
     prompt_tokens_stddev: int = 250,
