@@ -169,6 +169,8 @@ def _launch_and_record_scheduled(
 
     # Sleep until ~0.1s before scheduled time to prep work
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - 0.1))
+    prep_start = time.monotonic()
+
 
     # Prepare request inputs and configs
     prompt = randomly_sample_sonnet_lines_prompt(
@@ -187,6 +189,7 @@ def _launch_and_record_scheduled(
         llm_api=llm_api,
     )
 
+    prep_end = time.monotonic()
     safe_print(f"[request #{request_id}] Request prep completed with duration {prep_end - prep_start:.3f}s")
 
     # Final sleep until scheduled time
