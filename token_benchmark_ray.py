@@ -44,6 +44,7 @@ def run_schedule_mode(
         llm_api: str,
         model: str,
         schedule_file: str,
+        num_concurrent_requests: int,
         results_dir: str,
         additional_sampling_params: str,
         use_subdir: bool = True,
@@ -73,8 +74,7 @@ def run_schedule_mode(
 
 
     # Build a pool of launchers, each with its own Ray client
-    # Cap launchers at 700 or total requests, whichever is smaller
-    num_launchers = min(700, len(schedule))
+    num_launchers = num_concurrent_requests
     launcher_pool = Queue()
     for _ in range(num_launchers):
         clients = construct_clients(llm_api=llm_api, num_clients=1)
@@ -565,6 +565,7 @@ def run_token_benchmark(
             model=model,
             llm_api=llm_api,
             schedule_file=schedule_file,
+            num_concurrent_requests=num_concurrent_requests,
             results_dir=results_dir,
             additional_sampling_params=additional_sampling_params,
             use_subdir=schedule_file_subdir
@@ -778,7 +779,6 @@ if __name__ == "__main__":
             "--stddev-output-tokens": args.stddev_output_tokens != 80,
             "--num-concurrent-requests": args.num_concurrent_requests != 10,
             "--timeout": args.timeout != 90,
-            "--max-num-completed-requests": args.max_num_completed_requests != 10,
             "--mean-input-tokens": args.mean_input_tokens != 550,
             "--mean-output-tokens": args.mean_output_tokens != 150,
         }
