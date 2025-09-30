@@ -74,7 +74,7 @@ def run_schedule_mode(
 
 
     # Build a pool of launchers, each with its own Ray client
-    num_launchers = num_concurrent_requests
+    num_launchers = 700 #num_concurrent_requests #todo: put this back after experiments are done REQUIRES PR IN EXPERIMENTAL_ORCHESTRATION
     launcher_pool = Queue()
     for _ in range(num_launchers):
         clients = construct_clients(llm_api=llm_api, num_clients=1)
