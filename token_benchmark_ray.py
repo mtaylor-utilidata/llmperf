@@ -169,7 +169,7 @@ def _launch_and_record_scheduled(
     scheduled_offset = sched["scheduled_offset_s"]
 
     # Sleep until ~10s before scheduled time to prep work
-    time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - 10))  #10s prep buffer #todo: change this eventually to max(0.5s, observed_p95_prep_time)
+    time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - .1))  #.1s prep buffer
     prep_start = time.monotonic()
 
 
