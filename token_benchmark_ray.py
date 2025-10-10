@@ -44,7 +44,7 @@ def run_schedule_mode(
         num_concurrent_requests: int,
         results_dir: str,
         additional_sampling_params: str,
-        max_sampled_requests_per_second: int = 15,
+        max_sampled_requests_per_second: int = 20,
         use_subdir: bool = True,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """
@@ -915,7 +915,7 @@ def run_token_benchmark(
     user_metadata: Dict[str, Any],
     schedule_file: str = "", # optional; when set we route through the schedule branch
     schedule_file_subdir: bool = True,
-    max_sampled_requests_per_second: int = 15,
+    max_sampled_requests_per_second: int = 20,
 ):
     """
     Args:
@@ -1150,7 +1150,7 @@ args.add_argument(
 args.add_argument(
     "--max-sampled-requests-per-second",
     type=int,
-    default=15,
+    default=20,
     help=(
         "When using --schedule-file, this caps the rate of sampled requests per second. "
         "(default: %(default)s)"
