@@ -6,6 +6,11 @@ import random
 import re
 import threading
 import time
+import requests
+import boto3
+import logging
+import sys
+import statistics
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -31,14 +36,6 @@ from llmperf.utils import (
     sample_random_positive_int,
 )
 
-# Global lock for stdout
-_print_lock = threading.Lock()
-
-def safe_print(*args, **kwargs):
-    """Thread-safe print to stdout."""
-    with _print_lock:
-        print(*args, **kwargs, flush=True)
-
 def run_schedule_mode(
         *,
         llm_api: str,
@@ -47,11 +44,13 @@ def run_schedule_mode(
         num_concurrent_requests: int,
         results_dir: str,
         additional_sampling_params: str,
+        max_sampled_requests_per_second: int = 10,
         use_subdir: bool = True,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """
     Dispatch requests using a schedule file with delta timestamps.
     Preserves concurrency by launching requests in background threads at their appropriate offsets.
+    Samples requests per second to cap throughput.
     """
     # Determine whether to use a subdirectory for results
     if use_subdir:
@@ -72,61 +71,257 @@ def run_schedule_mode(
     # Read and parse the schedule CSV
     schedule = _load_schedule(schedule_file)
 
+    # --- NEW: apply sampling before any threads are allocated ---
+    schedule_sampled, schedule_not_sampled = _sample_schedule_records(schedule, max_sampled_requests_per_second)
 
-    # Build a pool of launchers, each with its own Ray client
-    num_launchers = min(700, len(schedule))
+    # Build a pool of launchers
+    num_launchers = min(700, len(schedule_sampled))
     launcher_pool = Queue()
     for _ in range(num_launchers):
         clients = construct_clients(llm_api=llm_api, num_clients=1)
         launcher_pool.put(RequestsLauncher(clients))
 
-    # Record base times
-    start_time_mono = time.monotonic() + 15  # delay to prep threads
+    start_time_mono = time.monotonic() + 15
     t0_utc = time.time()
 
     # Thread-safe collection of completed request metrics
-    completed_requests = []
-    completed_lock = threading.Lock()
+    completed_sampled_requests = []
+    completed_sampled_lock = threading.Lock()
+
+
+    # Logging and progress tracking
+    unsampled_counter = {"count": 0}
+    unsampled_lock = threading.Lock()
+
+    dispatch_stats_sampled = {"lags": []}
+    dispatch_stats_sampled_lock = threading.Lock()
+    dispatch_stats_unsampled = {"lags": []}
+    dispatch_stats_unsampled_lock = threading.Lock()
 
     log_lock = threading.Lock()
+    executor_sampled = ThreadPoolExecutor(max_workers=750)
+    executor_unsampled = ThreadPoolExecutor(max_workers=200)
 
-    # Launch all threads using natural concurrency
-    with ThreadPoolExecutor(max_workers=1000) as executor:
-        for sched in schedule:
-            executor.submit(
-                _launch_and_record_scheduled,
-                sched,
-                start_time_mono,
-                t0_utc,
-                model,
-                llm_api,
-                additional_sampling_params,
-                tokenizer,
-                get_token_length,
-                completed_requests,
-                completed_lock,
-                log_lock,
-                log_fh,
-                launcher_pool
-            )
+    # --- Run sampled schedule ---
+    for sched in schedule_sampled:
+        executor_sampled.submit(
+            _launch_and_record_scheduled,
+            sched,
+            start_time_mono,
+            t0_utc,
+            model,
+            llm_api,
+            additional_sampling_params,
+            tokenizer,
+            get_token_length,
+            completed_sampled_requests,
+            completed_sampled_lock,
+            log_lock,
+            log_fh,
+            launcher_pool,
+            dispatch_stats_sampled,
+            dispatch_stats_sampled_lock,
+        )
 
-    # Wait for all threads to complete and clean up
-    executor.shutdown(wait=True)
+    # --- Run unsampled schedule concurrently ---
+    for sched in schedule_not_sampled:
+        executor_unsampled.submit(
+            _run_unsampled_records,
+            sched,
+            start_time_mono,
+            t0_utc,
+            model,
+            llm_api,
+            additional_sampling_params,
+            tokenizer,
+            get_token_length,
+            log_lock,
+            log_fh,
+            unsampled_counter,
+            unsampled_lock,
+            dispatch_stats_unsampled,
+            dispatch_stats_unsampled_lock,
+        )
+
+    progress_thread = threading.Thread(
+        target=_log_progress_periodically,
+        args=(
+            completed_sampled_requests,
+            completed_sampled_lock,
+            len(schedule_sampled),
+            unsampled_counter,
+            unsampled_lock,
+            len(schedule_not_sampled),
+            start_time_mono,
+            dispatch_stats_sampled,
+            dispatch_stats_unsampled,
+            dispatch_stats_unsampled_lock,
+            dispatch_stats_sampled_lock,
+        ),
+        daemon=True,
+    )
+    progress_thread.start()
+
+    # --- Wait for both to complete ---
+    executor_sampled.shutdown(wait=True)
+    executor_unsampled.shutdown(wait=True)
+    progress_thread.join(timeout=2.0)  # allow it to exit cleanly
     log_fh.close()
+
+    time.sleep(2)  # ensure all logs are flushed
 
     print(f"\nResults for schedule-mode benchmark for {model} queried with {llm_api} API.\n")
 
-    summary = metrics_summary(completed_requests, start_time_mono, time.monotonic())
+    summary = metrics_summary(completed_sampled_requests, start_time_mono, time.monotonic())
     summary.update({
         "model": model,
         "num_concurrent_requests": "scheduled",
-        "num_launched": len(schedule),
+        "num_launched": len(schedule_sampled),
+        "num_unsampled": len(schedule_not_sampled),
         "schedule_file": schedule_file,
         "results_subdir": str(results_subdir_path),
         "wall_time_s": time.monotonic() - start_time_mono,
     })
 
-    return summary, completed_requests
+    return summary, completed_sampled_requests
+
+def _log_progress_periodically(
+        completed_requests,
+        completed_lock,
+        sampled_total,
+        unsampled_counter,
+        unsampled_lock,
+        unsampled_total,
+        start_time_mono=None,
+        dispatch_stats_sampled=None,
+        dispatch_stats_unsampled=None,
+        dispatch_stats_unsampled_lock=None,
+        dispatch_stats_sampled_lock=None,
+):
+    """Logs progress and dispatch timing stats every few seconds."""
+
+    interval_s=10.0
+
+    # --- Wait until launch start ---
+    if start_time_mono:
+        delay = max(0, start_time_mono - time.monotonic())
+        if delay > 0:
+            time.sleep(delay)
+
+    iteration = 0
+    while True:
+        iteration += 1
+        time.sleep(interval_s)
+        now = time.monotonic()
+        elapsed = (now - start_time_mono) if start_time_mono else 0.0
+
+        # --- Count progress ---
+        with completed_lock:
+            sampled_done = len(completed_requests)
+        with unsampled_lock:
+            unsampled_done = unsampled_counter["count"]
+
+        total_done = sampled_done + unsampled_done
+        total_all = sampled_total + unsampled_total
+
+        # --- Aggregate dispatch lag stats ---
+        def _stats(lags):
+            if not lags:
+                return (0.0, 0.0, 0.0)
+            return (
+                statistics.mean(lags),
+                max(lags),
+                statistics.median(lags),
+            )
+
+        with dispatch_stats_sampled_lock:
+            mean_s, max_s, med_s = _stats(dispatch_stats_sampled["lags"])
+        with dispatch_stats_unsampled_lock:
+            mean_u, max_u, med_u = _stats(dispatch_stats_unsampled["lags"])
+
+        # --- Emit progress (two-line log) ---
+        logger.info(
+            f"[progress +{elapsed:.1f}s] "
+            f"Sampled: {sampled_done}/{sampled_total} | "
+            f"Unsampled: {unsampled_done}/{unsampled_total} | "
+            f"Total: {total_done}/{total_all}"
+        )
+
+        #if the modulo of iteration is zero, log the lag stats
+        if iteration % 3 == 0:
+            _log_lag_statistics(max_s, max_u, mean_s, mean_u, med_s, med_u)
+
+        if total_done >= total_all:
+            _log_lag_statistics(max_s, max_u, mean_s, mean_u, med_s, med_u)
+            break
+
+
+def _log_lag_statistics(max_s, max_u, mean_s, mean_u, med_s, med_u):
+    logger.info(
+        f"  Lag stats — "
+        f"Sampled: avg {mean_s * 1000:.1f}ms | med {med_s * 1000:.1f}ms | max {max_s * 1000:.1f}ms || "
+        f"Unsampled: avg {mean_u * 1000:.1f}ms | med {med_u * 1000:.1f}ms | max {max_u * 1000:.1f}ms"
+    )
+
+
+def _sample_schedule_records(
+        schedule: List[Dict[str, Any]],
+        max_sampled_requests_per_second: int,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Bins schedule records into 1-second intervals and deterministically samples
+    up to `max_sampled_requests_per_second` per bin. Within each bin, samples
+    are evenly spaced across available offsets.
+    """
+    import math
+
+    if not schedule:
+        return [], []
+
+    # Ensure order by scheduled_offset_s
+    schedule = sorted(schedule, key=lambda x: x["scheduled_offset_s"])
+
+    # Group into integer-second bins
+    bins: Dict[int, List[Dict[str, Any]]] = {}
+    for rec in schedule:
+        bin_idx = int(math.floor(rec["scheduled_offset_s"]))
+        bins.setdefault(bin_idx, []).append(rec)
+        rec["sample"] = False
+
+    # Deterministic even selection
+    for bin_idx, records in bins.items():
+        n = len(records)
+        to_sample = min(max_sampled_requests_per_second, n)
+
+        if to_sample == 0:
+            continue
+
+        if to_sample >= n:
+            selected_indices = list(range(n))
+        else:
+            # Evenly distributed indices across [0, n-1]
+            step = (n - 1) / (to_sample - 1) if to_sample > 1 else 0
+            selected_indices = [int(round(i * step)) for i in range(to_sample)]
+
+        for idx in selected_indices:
+            records[idx]["sample"] = True
+
+        logger.debug(
+            f"[Bin {bin_idx:02d}s] Sampled {len(selected_indices)} of {n} records "
+            f"at indices {selected_indices}"
+        )
+
+    # Split out sampled vs unsampled
+    schedule_sampled = [r for r in schedule if r["sample"]]
+    schedule_not_sampled = [r for r in schedule if not r["sample"]]
+
+    logger.info(
+        f"***Sample Sizes Calculated *** Total sampled: {len(schedule_sampled)}, "
+        f"not sampled: {len(schedule_not_sampled)}"
+    )
+
+    return schedule_sampled, schedule_not_sampled
+
 
 def _prepare_results_subdir(results_dir: str, schedule_file: str) -> Path:
     """Creates a timestamped subdirectory"""
@@ -159,11 +354,13 @@ def _launch_and_record_scheduled(
         additional_sampling_params: str,
         tokenizer: LlamaTokenizerFast,
         get_token_length,
-        completed_requests: List[Dict[str, Any]],
-        completed_lock: threading.Lock,
+        completed_sampled_requests: List[Dict[str, Any]],
+        completed_sampled_lock: threading.Lock,
         log_lock: threading.Lock,
         log_fh,
         launcher_pool,   # <-- pool of RequestsLauncher
+        dispatch_stats_sampled: Dict[str, List[float]],
+        dispatch_stats_sampled_lock: threading.Lock,
 ):
     request_id = sched["request_id"]
     scheduled_offset = sched["scheduled_offset_s"]
@@ -190,7 +387,7 @@ def _launch_and_record_scheduled(
     )
 
     prep_end = time.monotonic()
-    safe_print(f"[request #{request_id}] Request prep completed with duration {prep_end - prep_start:.3f}s")
+    logger.debug(f"[request #{request_id}] Request prep completed with duration {prep_end - prep_start:.3f}s")
 
     # Final sleep until scheduled time
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
@@ -208,7 +405,10 @@ def _launch_and_record_scheduled(
         dispatch_ts = time.time()
         dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
 
-        safe_print(f"[request #{request_id}] Dispatch confirmed at offset {dispatch_offset:.3f}s "
+        with dispatch_stats_sampled_lock:
+            dispatch_stats_sampled["lags"].append(dispatch_lag)
+
+        logger.debug(f"[request #{request_id}] Dispatch confirmed at offset {dispatch_offset:.3f}s "
               f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
 
         # Collect response(s) for this launcher
@@ -225,7 +425,7 @@ def _launch_and_record_scheduled(
             response_offset = response_ts - t0_utc
             response_ts_utc = datetime.utcfromtimestamp(response_ts).isoformat(timespec="milliseconds") + "Z"
 
-            safe_print(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
+            logger.debug(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
 
             # Log to file
             with log_lock:
@@ -253,13 +453,177 @@ def _launch_and_record_scheduled(
                     num_output_tokens / request_metrics[common_metrics.E2E_LAT]
             )
 
-            with completed_lock:
-                completed_requests.append(request_metrics)
+            with completed_sampled_lock:
+                completed_sampled_requests.append(request_metrics)
+
+    except Exception as e:
+        logger.exception(f"[request #{request_id}] Exception during launch/record: {e}")
 
     finally:
         # --- Always return the launcher to the pool ---
         if not launcher_released:
             launcher_pool.put(req_launcher)
+
+
+def _run_unsampled_records(
+        sched: Dict[str, Any],
+        start_time_mono: float,
+        t0_utc: float,
+        model: str,
+        llm_api: str,
+        additional_sampling_params: str,
+        tokenizer: LlamaTokenizerFast,
+        get_token_length,
+        log_lock: threading.Lock,
+        log_fh,
+        unsampled_counter: Dict[str, int],
+        unsampled_lock: threading.Lock,
+        dispatch_stats_unsampled: Dict[str, List[float]],
+        dispatch_stats_unsampled_lock: threading.Lock,
+):
+    """
+    Fire-and-forget version of scheduled request launcher.
+    Does not stream, collect metrics, or use Ray — just dispatches a request
+    to fully load the backend and logs the dispatch timestamp.
+    """
+
+
+    request_id = sched["request_id"]
+    scheduled_offset = sched["scheduled_offset_s"]
+
+    # --- Sleep until ~10s before scheduled time to prep request ---
+    time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - 0.1))
+    logger.debug(f"[request #{sched['request_id']}][unsampled] Preparing unsampled dispatch...")
+
+    prep_start = time.monotonic()
+
+    # --- Prepare request payload ---
+    prompt = build_scheduled_sonnet_prompt(
+        input_tokens=sched["input_tokens"],
+        output_tokens=sched["output_tokens"],
+        tokenizer=tokenizer
+    )
+    sampling_params = {"max_tokens": sched["output_tokens"]}
+    sampling_params.update(json.loads(additional_sampling_params))
+
+
+    logger.debug(f"[request #{request_id}][unsampled] Request prep completed with duration {time.monotonic() - prep_start:.3f}s")
+
+    # --- Final sleep to align with schedule precisely ---
+    time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
+
+    dispatch_ts_mono = time.monotonic()
+    dispatch_offset = dispatch_ts_mono - start_time_mono
+    dispatch_lag = dispatch_offset - scheduled_offset
+    dispatch_ts = time.time()
+    dispatch_ts_utc = datetime.utcfromtimestamp(dispatch_ts).isoformat(timespec="milliseconds") + "Z"
+
+    with dispatch_stats_unsampled_lock:
+        dispatch_stats_unsampled["lags"].append(dispatch_lag)
+
+    logger.debug(
+        f"[request #{request_id}][unsampled] Dispatching fire-and-forget at offset {dispatch_offset:.3f}s "
+        f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)"
+    )
+
+
+    # --- Dispatch logic (non-streaming, best-effort) ---
+    try:
+        if llm_api in ("litellm", "openai"):
+            # Shared OpenAI-style request
+            body = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": ""},
+                    {"role": "user", "content": prompt},
+                ],
+                "stream": False,
+            }
+            body.update(sampling_params or {})
+
+            if llm_api == "litellm":
+                from litellm import completion
+                completion(**body)
+            else:
+                address = os.environ.get("OPENAI_API_BASE")
+                key = os.environ.get("OPENAI_API_KEY")
+                if not address or not key:
+                    raise ValueError("Missing OPENAI_API_BASE or OPENAI_API_KEY.")
+                if not address.endswith("/"):
+                    address += "/"
+                address += "chat/completions"
+                headers = {"Authorization": f"Bearer {key}"}
+                requests.post(address, json=body, headers=headers, timeout=60)
+
+            with unsampled_lock:
+                unsampled_counter["count"] += 1
+
+        elif llm_api == "sagemaker":
+            region = os.environ.get("AWS_REGION_NAME")
+            if not region:
+                raise ValueError("AWS_REGION_NAME must be set for SageMaker.")
+            sm_runtime = boto3.client("sagemaker-runtime", region_name=region)
+            message = {
+                "inputs": [
+                    [
+                        {"role": "system", "content": ""},
+                        {"role": "user", "content": prompt},
+                    ]
+                ],
+                "parameters": sampling_params,
+            }
+            sm_runtime.invoke_endpoint(
+                EndpointName=model,
+                ContentType="application/json",
+                Body=json.dumps(message),
+                CustomAttributes="accept_eula=true",
+            )
+            with unsampled_lock:
+                unsampled_counter["count"] += 1
+
+        elif llm_api == "vertexai":
+            project_id = os.environ.get("GCLOUD_PROJECT_ID")
+            region = os.environ.get("GCLOUD_REGION")
+            endpoint_id = os.environ.get("VERTEXAI_ENDPOINT_ID")
+            access_token = os.environ.get("GCLOUD_ACCESS_TOKEN", "").strip()
+            if not all([project_id, region, endpoint_id, access_token]):
+                raise ValueError("Missing required VertexAI env vars.")
+            url = (
+                f"https://{region}-aiplatform.googleapis.com/v1/projects/"
+                f"{project_id}/locations/{region}/endpoints/{endpoint_id}:predict"
+            )
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
+            if "max_new_tokens" in sampling_params:
+                sampling_params["maxOutputTokens"] = sampling_params.pop("max_new_tokens")
+            data = {
+                "instances": [{"prompt": prompt}],
+                "parameters": sampling_params,
+            }
+            requests.post(url, headers=headers, data=json.dumps(data), timeout=60)
+            with unsampled_lock:
+                unsampled_counter["count"] += 1
+
+        else:
+            logger.warning(f"[request #{request_id}][unsampled] Unsupported llm_api: {llm_api}")
+
+    except Exception as e:
+        logger.exception(f"[request #{request_id}][unsampled] Dispatch failed: {e}")
+
+    # --- Log the dispatch event ---
+    with log_lock:
+        log_fh.write(json.dumps({
+            "request_id": request_id,
+            "scheduled_offset_s": scheduled_offset,
+            "dispatch_offset_s": round(dispatch_offset, 3),
+            "dispatch_lag_s": round(dispatch_lag, 3),
+            "dispatch_ts_utc": dispatch_ts_utc,
+            "unsampled": True,
+        }) + "\n")
+        log_fh.flush()
+
 
 
 
@@ -530,7 +894,8 @@ def run_token_benchmark(
     results_dir: str,
     user_metadata: Dict[str, Any],
     schedule_file: str = "", # optional; when set we route through the schedule branch
-    schedule_file_subdir: bool = True
+    schedule_file_subdir: bool = True,
+    max_sampled_requests_per_second: int = 10,
 ):
     """
     Args:
@@ -568,7 +933,8 @@ def run_token_benchmark(
             num_concurrent_requests=num_concurrent_requests,
             results_dir=results_dir,
             additional_sampling_params=additional_sampling_params,
-            use_subdir=schedule_file_subdir
+            use_subdir=schedule_file_subdir,
+            max_sampled_requests_per_second=max_sampled_requests_per_second
         )
 
         # Update to summary.
@@ -761,10 +1127,58 @@ args.add_argument(
     ),
 )
 
+args.add_argument(
+    "--max-sampled-requests-per-second",
+    type=int,
+    default=10,
+    help=(
+        "When using --schedule-file, this caps the rate of sampled requests per second. "
+        "(default: %(default)s)"
+        "All unsampled requests are sent as fast as possible without inference metrics collected."
+    ),
+)
+
+args.add_argument(
+    "--log-level",
+    type=str,
+    default="INFO",
+    choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    help="Set the logging verbosity level (default: INFO).",
+)
+
+def setup_logger(level: str):
+    """Thread-safe logger with adjustable verbosity."""
+    logger = logging.getLogger("benchmark")
+    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+    # Clear old handlers if re-run interactively
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="[%(asctime)s.%(msecs)03d] [%(levelname)s] %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+    logger.addHandler(handler)
+
+    # Silence noisy deps
+    logging.getLogger("ray").setLevel(logging.WARNING)
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    return logger
+
 if __name__ == "__main__":
     env_vars = dict(os.environ)
     ray.init(runtime_env={"env_vars": env_vars})
     args = args.parse_args()
+
+
+    # Set up logger before anything noisy
+    logger = setup_logger(args.log_level)
+    logger.info(f"Log level set to {args.log_level}")
 
     # Parse user metadata.
     user_metadata = {}
@@ -803,5 +1217,6 @@ if __name__ == "__main__":
         results_dir=args.results_dir,
         user_metadata=user_metadata,
         schedule_file=args.schedule_file,
-        schedule_file_subdir=args.schedule_file_subdir
+        schedule_file_subdir=args.schedule_file_subdir,
+        max_sampled_requests_per_second=args.max_sampled_requests_per_second
     )
