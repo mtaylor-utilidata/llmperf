@@ -76,7 +76,7 @@ def run_schedule_mode(
 
     # Build a pool of launchers
     num_launchers = min(700, len(schedule_sampled))
-    launcher_pool = Queue()
+    launcher_pool = Queue(maxsize=num_launchers)
     for _ in range(num_launchers):
         clients = construct_clients(llm_api=llm_api, num_clients=1)
         launcher_pool.put(RequestsLauncher(clients))
@@ -157,6 +157,7 @@ def run_schedule_mode(
             dispatch_stats_unsampled,
             dispatch_stats_unsampled_lock,
             dispatch_stats_sampled_lock,
+            launcher_pool
         ),
         daemon=True,
     )
@@ -197,6 +198,7 @@ def _log_progress_periodically(
         dispatch_stats_unsampled=None,
         dispatch_stats_unsampled_lock=None,
         dispatch_stats_sampled_lock=None,
+        launcher_pool=None,
 ):
     """Logs progress and dispatch timing stats every few seconds."""
 
@@ -239,13 +241,31 @@ def _log_progress_periodically(
         with dispatch_stats_unsampled_lock:
             mean_u, max_u, med_u = _stats(dispatch_stats_unsampled["lags"])
 
-        # --- Emit progress (two-line log) ---
+            # --- Launcher pool saturation ---
+        saturation_pct = None
+        if launcher_pool is not None:
+            total_launchers = launcher_pool.maxsize
+            idle_launchers = launcher_pool.qsize()
+            busy_launchers = total_launchers - idle_launchers
+            saturation_pct = (busy_launchers / total_launchers * 100.0) if total_launchers else 0.0
+            pool_status = f"Launchers busy: {busy_launchers}/{total_launchers} ({saturation_pct:.1f}% used)"
+        else:
+            pool_status = "(no launcher pool info)"
+
+        # --- Emit progress line ---
         logger.info(
             f"[progress +{elapsed:.1f}s] "
             f"Sampled: {sampled_done}/{sampled_total} | "
             f"Unsampled: {unsampled_done}/{unsampled_total} | "
-            f"Total: {total_done}/{total_all}"
+            f"Total: {total_done}/{total_all} | "
+            f"{pool_status}"
         )
+
+        #warn if we are running out of launchers (over 95% saturation)
+        if launcher_pool is not None and saturation_pct is not None and saturation_pct > 95.0 and saturation_pct < 99.99:
+            logger.warning(f"High launcher pool saturation: {saturation_pct:.1f}% used. Consider lowering '--max-sampled-requests-per-second'.")
+        elif launcher_pool is not None and saturation_pct is not None and saturation_pct >= 99.99:
+            logger.error(f"Critical launcher pool saturation: {saturation_pct:.1f}% used. Upcoming requests will likely be delayed from their scheduled dispatch. Consider lowering '--max-sampled-requests-per-second'.")
 
         #if the modulo of iteration is zero, log the lag stats
         if iteration % 3 == 0:
@@ -259,8 +279,8 @@ def _log_progress_periodically(
 def _log_lag_statistics(max_s, max_u, mean_s, mean_u, med_s, med_u):
     logger.info(
         f"  Lag stats — "
-        f"Sampled: avg {mean_s * 1000:.1f}ms | med {med_s * 1000:.1f}ms | max {max_s * 1000:.1f}ms || "
-        f"Unsampled: avg {mean_u * 1000:.1f}ms | med {med_u * 1000:.1f}ms | max {max_u * 1000:.1f}ms"
+        f"Sampled: avg {mean_s:.3f}s | med {med_s:.3f}s | max {max_s:.3f}s || "
+        f"Unsampled: avg {mean_u:.3f}s | med {med_u:.3f}s | max {max_u:.3f}s"
     )
 
 
