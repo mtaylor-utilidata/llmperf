@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import math
 import os
 import random
 import re
@@ -13,7 +14,7 @@ import sys
 import statistics
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from shutil import copyfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -22,7 +23,8 @@ from queue import Queue
 import pandas as pd
 import ray
 from tqdm import tqdm
-from transformers import LlamaTokenizerFast
+from transformers import AutoTokenizer, LlamaTokenizerFast
+
 
 from llmperf import common_metrics
 from llmperf.common import SUPPORTED_APIS, construct_clients
@@ -65,7 +67,7 @@ def run_schedule_mode(
     log_fh = open(results_subdir_path / "requests_sent.log", "a")
 
     # Load tokenizer
-    tokenizer = LlamaTokenizerFast.from_pretrained("hf-internal-testing/llama-tokenizer")
+    tokenizer = get_tokenizer_for_model(model)
     get_token_length = lambda text: len(tokenizer.encode(text))
 
     # Read and parse the schedule CSV
@@ -81,7 +83,10 @@ def run_schedule_mode(
         clients = construct_clients(llm_api=llm_api, num_clients=1)
         launcher_pool.put(RequestsLauncher(clients))
 
-    start_time_mono = time.monotonic() + 15
+    delay = 15
+    start_time_mono = time.monotonic() + delay
+    launch_time = datetime.fromtimestamp(time.time() + delay, tz=timezone.utc)
+    logger.info(f"*** Scheduled launch starting in {delay}s at {launch_time.isoformat(timespec='seconds')} ***")
     t0_utc = time.time()
 
     # Thread-safe collection of completed request metrics
@@ -171,7 +176,7 @@ def run_schedule_mode(
 
     time.sleep(2)  # ensure all logs are flushed
 
-    print(f"\nResults for schedule-mode benchmark for {model} queried with {llm_api} API.\n")
+    logger.info(f"\nResults for schedule-mode benchmark for {model} queried with {llm_api} API.\n")
 
     summary = metrics_summary(completed_sampled_requests, start_time_mono, time.monotonic())
     summary.update({
@@ -372,7 +377,7 @@ def _launch_and_record_scheduled(
         model: str,
         llm_api: str,
         additional_sampling_params: str,
-        tokenizer: LlamaTokenizerFast,
+        tokenizer: AutoTokenizer,
         get_token_length,
         completed_sampled_requests: List[Dict[str, Any]],
         completed_sampled_lock: threading.Lock,
@@ -460,19 +465,7 @@ def _launch_and_record_scheduled(
                 }) + "\n")
                 log_fh.flush()
 
-            # Metric augmentation
-            num_output_tokens = get_token_length(gen_text)
-            request_metrics[common_metrics.INTER_TOKEN_LAT] = (
-                request_metrics[common_metrics.INTER_TOKEN_LAT] / num_output_tokens if num_output_tokens else 0
-            )
-            request_metrics[common_metrics.NUM_OUTPUT_TOKENS] = num_output_tokens
-            request_metrics[common_metrics.NUM_TOTAL_TOKENS] = (
-                    request_metrics[common_metrics.NUM_INPUT_TOKENS] + num_output_tokens
-            )
-            request_metrics[common_metrics.REQ_OUTPUT_THROUGHPUT] = (
-                    num_output_tokens / request_metrics[common_metrics.E2E_LAT]
-            )
-
+            request_metrics = finalize_request_metrics(request_metrics, gen_text, common_metrics, get_token_length, request_id=request_id)
             with completed_sampled_lock:
                 completed_sampled_requests.append(request_metrics)
 
@@ -492,7 +485,7 @@ def _run_unsampled_records(
         model: str,
         llm_api: str,
         additional_sampling_params: str,
-        tokenizer: LlamaTokenizerFast,
+        tokenizer: AutoTokenizer,
         get_token_length,
         log_lock: threading.Lock,
         log_fh,
@@ -681,9 +674,7 @@ def get_token_throughput_latencies(
     """
     random.seed(11111)
 
-    tokenizer = LlamaTokenizerFast.from_pretrained(
-        "hf-internal-testing/llama-tokenizer"
-    )
+    tokenizer = get_tokenizer_for_model(model)
     get_token_length = lambda text: len(tokenizer.encode(text))
 
     if not additional_sampling_params:
@@ -735,16 +726,9 @@ def get_token_throughput_latencies(
             all_metrics = []
             for out in outs:
                 request_metrics, gen_text, _ = out
-                num_output_tokens = get_token_length(gen_text)
+                request_metrics = finalize_request_metrics(request_metrics, gen_text, common_metrics, get_token_length)
                 with completed_requests_lock:
                     if num_completed_requests < max_num_completed_requests:
-                        if num_output_tokens:
-                            request_metrics[common_metrics.INTER_TOKEN_LAT] /= request_metrics[common_metrics.NUM_OUTPUT_TOKENS]
-                        else:
-                            request_metrics[common_metrics.INTER_TOKEN_LAT] = 0
-                        request_metrics[common_metrics.NUM_OUTPUT_TOKENS] = num_output_tokens
-                        request_metrics[common_metrics.NUM_TOTAL_TOKENS] = request_metrics[common_metrics.NUM_INPUT_TOKENS] + num_output_tokens
-                        request_metrics[common_metrics.REQ_OUTPUT_THROUGHPUT] = num_output_tokens / request_metrics[common_metrics.E2E_LAT]
                         all_metrics.append(request_metrics)
                         completed_requests.extend(all_metrics)
                         pbar.update(len(all_metrics))
@@ -801,6 +785,107 @@ def get_token_throughput_latencies(
 
     return metadata, completed_requests
 
+# Optional: import tiktoken if available
+try:
+    import tiktoken
+except ImportError:
+    tiktoken = None
+
+_tokenizer_cache = {}
+
+# Map of known model substrings → tokenizer loader function
+KNOWN_TOKENIZERS = {
+    # OpenAI models use tiktoken
+    "gpt-4o": lambda: tiktoken.get_encoding("o200k_base") if tiktoken else None,
+    "gpt-4-turbo": lambda: tiktoken.get_encoding("o200k_base") if tiktoken else None,
+    "gpt-4": lambda: tiktoken.get_encoding("cl100k_base") if tiktoken else None,
+    "gpt-3.5": lambda: tiktoken.get_encoding("cl100k_base") if tiktoken else None,
+    "text-davinci": lambda: tiktoken.get_encoding("p50k_base") if tiktoken else None,
+}
+
+def get_tokenizer_for_model(model_name: str):
+    """
+    Attempts to load a tokenizer for a given model name.
+    1. Tries known local mappings (e.g. OpenAI/tiktoken)
+    2. Then tries Hugging Face AutoTokenizer
+    3. Falls back to LlamaTokenizerFast
+    """
+    if model_name in _tokenizer_cache:
+        return _tokenizer_cache[model_name]
+
+    # 1. Known special cases (OpenAI, etc.)
+    for key, fn in KNOWN_TOKENIZERS.items():
+        if key in model_name.lower():
+            tokenizer = fn()
+            if tokenizer:
+                logger.info(f"Using known tokenizer for model '{model_name}': {key}")
+                logger.info(f"Tokenizer type: {type(tokenizer)}")
+                _tokenizer_cache[model_name] = tokenizer
+                return tokenizer
+            else:
+                logger.warning(
+                    f"Known tokenizer for '{model_name}' requires `tiktoken` but it’s not installed."
+                )
+
+    # 2. Hugging Face fallback
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+        logger.info(f"Loaded HF tokenizer for model '{model_name}'.")
+        _tokenizer_cache[model_name] = tokenizer
+        return tokenizer
+    except Exception as e:
+        logger.warning(
+            f"Failed to load tokenizer for '{model_name}' from Hugging Face ({e}). "
+            "Falling back to LlamaTokenizerFast."
+        )
+
+    # 3. Llama fallback
+    tokenizer = LlamaTokenizerFast.from_pretrained("hf-internal-testing/llama-tokenizer")
+    _tokenizer_cache[model_name] = tokenizer
+    logger.warning(f"USING THE FALLBACK 'LlamaTokenizerFast' TOKENIZER MAY RESULT IN INACCURATE TOKEN COUNTS WHEN USED WITH A MODEL WHICH USES A DIFFERENT TOKENIZER.")
+    return tokenizer
+
+def finalize_request_metrics(request_metrics, gen_text, common_metrics, get_token_length, request_id=None):
+    """Normalize and augment request metrics with token and throughput info."""
+    num_output_tokens = get_token_length(gen_text)
+
+    ttft = request_metrics.get(common_metrics.TTFT, 0)
+    itl_sum = request_metrics.get(common_metrics.INTER_TOKEN_LAT_SUM, 0)
+    e2e = request_metrics.get(common_metrics.E2E_LAT, 0)
+
+    expected_total = ttft + itl_sum
+
+    # Warn if E2E differs significantly from TTFT + ITL_SUM
+    if not math.isclose(expected_total, e2e, rel_tol=0.01, abs_tol=0.002):
+        diff = e2e - expected_total
+        pct_diff = (diff / e2e * 100) if e2e else float("nan")
+        id_prefix = f"[request #{request_id}] " if request_id is not None else ""
+        logger.warning(
+            f"{id_prefix}"
+            f"Latency mismatch: E2E ({e2e:.3f}s) vs TTFT+ITL_SUM ({expected_total:.3f}s) "
+            f"Δ={diff:+.3f}s ({pct_diff:+.2f}%)"
+        )
+
+    # Calculate mean inter-token latency excluding first token
+    if num_output_tokens > 1:
+        request_metrics[common_metrics.INTER_TOKEN_LAT_MEAN] = (
+                request_metrics[common_metrics.INTER_TOKEN_LAT_SUM] / (num_output_tokens - 1)
+        )
+    else:
+        request_metrics[common_metrics.INTER_TOKEN_LAT_MEAN] = 0.0
+
+    request_metrics[common_metrics.NUM_OUTPUT_TOKENS] = num_output_tokens
+    request_metrics[common_metrics.NUM_TOTAL_TOKENS] = (
+            request_metrics[common_metrics.NUM_INPUT_TOKENS] + num_output_tokens
+    )
+    request_metrics[common_metrics.REQ_OUTPUT_THROUGHPUT] = (
+        num_output_tokens / request_metrics[common_metrics.E2E_LAT]
+        if request_metrics[common_metrics.E2E_LAT]
+        else 0
+    )
+
+    return request_metrics
+
 
 def metrics_summary(
     metrics: List[Dict[str, Any]], start_time: int, end_time: int
@@ -839,7 +924,8 @@ def metrics_summary(
     df_without_errored_req = df[df[common_metrics.ERROR_CODE].isna()]
 
     for key in [
-        common_metrics.INTER_TOKEN_LAT,
+        common_metrics.INTER_TOKEN_LAT_SUM,
+        common_metrics.INTER_TOKEN_LAT_MEAN,
         common_metrics.TTFT,
         common_metrics.E2E_LAT,
         common_metrics.REQ_OUTPUT_THROUGHPUT,
@@ -1199,6 +1285,8 @@ if __name__ == "__main__":
     # Set up logger before anything noisy
     logger = setup_logger(args.log_level)
     logger.info(f"Log level set to {args.log_level}")
+    logging.Formatter.converter = time.gmtime
+
 
     # Parse user metadata.
     user_metadata = {}

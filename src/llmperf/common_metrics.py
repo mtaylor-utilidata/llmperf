@@ -1,5 +1,6 @@
 # TODO (Avnishn): compute metrics in class
-INTER_TOKEN_LAT = "inter_token_latency_s"
+INTER_TOKEN_LAT_SUM = "sum_inter_token_latency_s"
+INTER_TOKEN_LAT_MEAN = "mean_inter_token_latency_s"
 TTFT = "ttft_s"
 E2E_LAT = "end_to_end_latency_s"
 NUM_INPUT_TOKENS = "number_input_tokens"

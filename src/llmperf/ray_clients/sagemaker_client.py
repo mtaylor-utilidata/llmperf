@@ -62,7 +62,7 @@ class SageMakerClient(LLMClient):
             },
         }
 
-        time_to_next_token = []
+        times_to_next_token_array = []
         tokens_received = 0
         ttft = 0
         error_response_code = None
@@ -86,18 +86,27 @@ class SageMakerClient(LLMClient):
 
             event_stream = response["Body"]
             json_byte = b""
+
+            first_token = True
             for line, ttft, _ in LineIterator(event_stream):
                 json_byte += line
-                time_to_next_token.append(
-                    time.monotonic() - most_recent_received_token_time
-                )
+
+                if first_token:
+                    # Capture TTFT but do NOT append it to time_to_next_token
+                    ttft = ttft - start_time
+                    first_token = False
+                else:
+                    # Record inter-token gaps after first token
+                    times_to_next_token_array.append(time.monotonic() - most_recent_received_token_time)
+
                 most_recent_received_token_time = time.monotonic()
-            ttft = ttft - start_time
+
             resp = json.loads(json_byte)
             total_request_time = time.monotonic() - start_time
             generated_text = resp[0]["generation"]["content"]
             tokens_received = len(self.tokenizer.encode(generated_text))
             output_throughput = tokens_received / total_request_time
+
 
         except Exception as e:
             print(f"Warning Or Error: {e}")
@@ -107,7 +116,8 @@ class SageMakerClient(LLMClient):
 
         metrics[common_metrics.ERROR_MSG] = error_msg
         metrics[common_metrics.ERROR_CODE] = error_response_code
-        metrics[common_metrics.INTER_TOKEN_LAT] = time_to_next_token
+        metrics[common_metrics.INTER_TOKEN_LAT_SUM] = sum(times_to_next_token_array)
+        metrics[common_metrics.INTER_TOKEN_LAT_MEAN] = statistics.mean(times_to_next_token_array) #todo: This gets overwritten figure out what should happen
         metrics[common_metrics.TTFT] = ttft
         metrics[common_metrics.E2E_LAT] = total_request_time
         metrics[common_metrics.START_TIME] = unix_start_time

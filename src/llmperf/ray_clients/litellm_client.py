@@ -1,3 +1,4 @@
+import statistics
 import time
 from typing import Any, Dict
 import ray
@@ -44,7 +45,7 @@ class LiteLLMClient(LLMClient):
         sampling_params = request_config.sampling_params
         body.update(sampling_params or {})
 
-        time_to_next_token = []
+        times_to_next_token_array = []
         tokens_received = 0
         ttft = 0
         error_response_code = -1
@@ -71,9 +72,8 @@ class LiteLLMClient(LLMClient):
                     if delta.get("content", None):
                         if ttft == 0:
                             ttft = time.monotonic() - start_time
-                            time_to_next_token.append(ttft)
                         else:
-                            time_to_next_token.append(
+                            times_to_next_token_array.append(
                                 time.monotonic() - most_recent_received_token_time
                             )
                         generated_text += delta["content"]
@@ -91,7 +91,8 @@ class LiteLLMClient(LLMClient):
             print(f"Warning Or Error: {e}")
             print(error_response_code)
 
-        metrics[common_metrics.INTER_TOKEN_LAT] = sum(time_to_next_token)
+        metrics[common_metrics.INTER_TOKEN_LAT_SUM] = sum(times_to_next_token_array)
+        metrics[common_metrics.INTER_TOKEN_LAT_MEAN] = statistics.mean(times_to_next_token_array) #todo: This gets overwritten figure out what should happen
         metrics[common_metrics.TTFT] = ttft
         metrics[common_metrics.E2E_LAT] = total_request_time
         metrics[common_metrics.START_TIME] = unix_start_time

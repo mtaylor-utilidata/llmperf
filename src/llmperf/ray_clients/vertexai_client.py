@@ -1,5 +1,6 @@
 import json
 import os
+import statistics
 import time
 from typing import Any, Dict
 
@@ -43,7 +44,7 @@ class VertexAIClient(LLMClient):
         prompt = request_config.prompt
         prompt, prompt_len = prompt
 
-        time_to_next_token = []
+        times_to_next_token_array = []
         tokens_received = 0
         ttft = 0
         generated_text = ""
@@ -70,9 +71,7 @@ class VertexAIClient(LLMClient):
 
             sampling_params = request_config.sampling_params
             if "max_new_tokens" in sampling_params:
-                sampling_params["maxOutputTokens"] = sampling_params.pop(
-                    "max_new_tokens"
-                )
+                sampling_params["maxOutputTokens"] = sampling_params.pop("max_new_tokens")
 
             # Define the data payload
             data = {"instances": [{"prompt": prompt}], "parameters": sampling_params}
@@ -84,15 +83,23 @@ class VertexAIClient(LLMClient):
             total_request_time = time.monotonic() - start_time
             response_code = response.status_code
             response.raise_for_status()
+
             # output from the endpoint is in the form:
             # {"predictions": ["Input: ... \nOutput:\n ..."]}
             generated_text = response.json()["predictions"][0].split("\nOutput:\n")[1]
             tokens_received = len(self.tokenizer.encode(generated_text))
-            ttft = -1
+
+            # Non-streaming endpoint → no true TTFT, so mark as total request time (or 0)
+            ttft = 0.0  # or total_request_time if you want to treat all time as startup latency
+
+            # Spread remaining time across tokens as pseudo-ITL
+            if tokens_received > 1:
+                avg_itl = total_request_time / (tokens_received - 1)
+                times_to_next_token_array = [avg_itl for _ in range(tokens_received - 1)]
+            else:
+                times_to_next_token_array = []
+
             output_throughput = tokens_received / total_request_time
-            time_to_next_token = [
-                total_request_time / tokens_received for _ in range(tokens_received)
-            ]
 
         except Exception as e:
             metrics[common_metrics.ERROR_MSG] = str(e)
@@ -101,7 +108,8 @@ class VertexAIClient(LLMClient):
             print(response_code)
             print(response_code)
 
-        metrics[common_metrics.INTER_TOKEN_LAT] = time_to_next_token
+        metrics[common_metrics.INTER_TOKEN_LAT_SUM] = sum(times_to_next_token_array)
+        metrics[common_metrics.INTER_TOKEN_LAT_MEAN] = statistics.mean(times_to_next_token_array) #todo: This gets overwritten figure out what should happen
         metrics[common_metrics.TTFT] = ttft
         metrics[common_metrics.E2E_LAT] = total_request_time
         metrics[common_metrics.START_TIME] = unix_start_time

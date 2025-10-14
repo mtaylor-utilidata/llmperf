@@ -1,5 +1,6 @@
 import json
 import os
+import statistics
 import time
 from typing import Any, Dict
 
@@ -31,7 +32,7 @@ class OpenAIChatCompletionsClient(LLMClient):
         }
         sampling_params = request_config.sampling_params
         body.update(sampling_params or {})
-        time_to_next_token = []
+        times_to_next_token_array = []
         tokens_received = 0
         ttft = 0
         error_response_code = -1
@@ -46,6 +47,7 @@ class OpenAIChatCompletionsClient(LLMClient):
         metrics[common_metrics.ERROR_MSG] = ""
 
         start_time = time.monotonic()
+        last_chunk_time = start_time
         unix_start_time = time.time()
         most_recent_received_token_time = time.monotonic()
         address = os.environ.get("OPENAI_API_BASE")
@@ -93,15 +95,15 @@ class OpenAIChatCompletionsClient(LLMClient):
                     if delta.get("content", None):
                         if not ttft:
                             ttft = time.monotonic() - start_time
-                            time_to_next_token.append(ttft)
                         else:
-                            time_to_next_token.append(
+                            times_to_next_token_array.append(
                                 time.monotonic() - most_recent_received_token_time
                             )
                         most_recent_received_token_time = time.monotonic()
+                        last_chunk_time = most_recent_received_token_time
                         generated_text += delta["content"]
 
-            total_request_time = time.monotonic() - start_time
+            total_request_time = last_chunk_time - start_time
             output_throughput = tokens_received / total_request_time
 
         except Exception as e:
@@ -110,7 +112,8 @@ class OpenAIChatCompletionsClient(LLMClient):
             print(f"Warning Or Error: {e}")
             print(error_response_code)
 
-        metrics[common_metrics.INTER_TOKEN_LAT] = sum(time_to_next_token) #This should be same as metrics[common_metrics.E2E_LAT]. Leave it here for now
+        metrics[common_metrics.INTER_TOKEN_LAT_SUM] = sum(times_to_next_token_array)
+        metrics[common_metrics.INTER_TOKEN_LAT_MEAN] = statistics.mean(times_to_next_token_array) #todo: This gets overwritten figure out what should happen
         metrics[common_metrics.TTFT] = ttft
         metrics[common_metrics.E2E_LAT] = total_request_time
         metrics[common_metrics.START_TIME] = unix_start_time
