@@ -85,7 +85,7 @@ def run_schedule_mode(
     delay = 5
     start_time_mono = time.monotonic() + delay
     launch_time = datetime.fromtimestamp(time.time() + delay, tz=timezone.utc)
-    max_response_log_str = f"  Schedule should continue on track as long as requests don't exceed ~{num_launchers / max_sampled_requests_per_second}s on average." if num_launchers < len(schedule_sampled) else ""
+    max_response_log_str = f"  Schedule should continue on track as long as requests don't exceed ~{num_launchers / max_sampled_requests_per_second}s e2e latency on average." if num_launchers < len(schedule_sampled) else ""
 
     logger.info(
         f"\n*** Scheduled launch starting in {delay}s at {launch_time.isoformat(timespec='seconds')} *** \n"
