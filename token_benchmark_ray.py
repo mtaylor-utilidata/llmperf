@@ -164,6 +164,7 @@ def run_schedule_mode(
             unsampled_counter,
             unsampled_lock,
             len(schedule_not_sampled),
+            min(max_sampled_requests_per_second, len(schedule_sampled)),
             start_time_mono,
             dispatch_stats_sampled,
             dispatch_stats_unsampled,
@@ -205,6 +206,7 @@ def _log_progress_periodically(
         unsampled_counter,
         unsampled_lock,
         unsampled_total,
+        max_sampled_requests_per_second,
         start_time_mono=None,
         dispatch_stats_sampled=None,
         dispatch_stats_unsampled=None,
@@ -253,24 +255,34 @@ def _log_progress_periodically(
         with dispatch_stats_unsampled_lock:
             mean_u, max_u, med_u = _stats(dispatch_stats_unsampled["lags"])
 
-            # --- Launcher pool saturation ---
+        # --- Launcher pool saturation ---
         saturation_pct = None
         if launcher_pool is not None:
             total_launchers = launcher_pool.maxsize
             idle_launchers = launcher_pool.qsize()
             busy_launchers = total_launchers - idle_launchers
             saturation_pct = (busy_launchers / total_launchers * 100.0) if total_launchers else 0.0
-            pool_status = f"Launchers busy: {busy_launchers}/{total_launchers} ({saturation_pct:.1f}% used)"
+            pool_status = f" | Launchers busy: {busy_launchers}/{total_launchers} ({saturation_pct:.1f}% used)"
         else:
-            pool_status = "(no launcher pool info)"
+            pool_status = " | (no launcher pool info)"
+
+        #Calculate response timings
+        response_timings = ""
+        if len(completed_requests) > 0: # Average the end to end latency across the last 16 completed requests
+            # you can get the e2e from an element of completed requests with element.get(common_metrics.E2E_LAT, 0)
+            number_to_average = int(max_sampled_requests_per_second * interval_s)
+            recent_latencies = [r.get(common_metrics.E2E_LAT, 0) for r in completed_requests[-number_to_average:]]
+            avg_recent_latency = sum(recent_latencies) / len(recent_latencies)
+            response_timings = f" | Average e2e latency of last {len(recent_latencies)} sampled requests: {avg_recent_latency:.3f}s"
 
         # --- Emit progress line ---
         logger.info(
             f"[progress +{elapsed:.1f}s] "
             f"Sampled: {sampled_done}/{sampled_total} | "
             f"Unsampled: {unsampled_done}/{unsampled_total} | "
-            f"Total: {total_done}/{total_all} | "
+            f"Total: {total_done}/{total_all}"
             f"{pool_status}"
+            f"{response_timings}"
         )
 
         #warn if we are running out of launchers (over 95% saturation)
