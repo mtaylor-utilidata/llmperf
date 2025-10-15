@@ -43,7 +43,6 @@ def run_schedule_mode(
         llm_api: str,
         model: str,
         schedule_file: str,
-        num_concurrent_requests: int,
         results_dir: str,
         additional_sampling_params: str,
         max_sampled_requests_per_second: int = 15,
@@ -83,10 +82,18 @@ def run_schedule_mode(
         clients = construct_clients(llm_api=llm_api, num_clients=1)
         launcher_pool.put(RequestsLauncher(clients))
 
-    delay = 15
+    delay = 5
     start_time_mono = time.monotonic() + delay
     launch_time = datetime.fromtimestamp(time.time() + delay, tz=timezone.utc)
-    logger.info(f"*** Scheduled launch starting in {delay}s at {launch_time.isoformat(timespec='seconds')} ***")
+    max_response_log_str = f"  Schedule should continue on track as long as requests don't exceed ~{num_launchers / max_sampled_requests_per_second}s on average." if num_launchers < len(schedule_sampled) else ""
+
+    logger.info(
+        f"\n*** Scheduled launch starting in {delay}s at {launch_time.isoformat(timespec='seconds')} *** \n"
+        f"  Total sampled requests to launch: {len(schedule_sampled)} \n"
+        f"  Max number of requests measured per second: {max_sampled_requests_per_second} \n"
+        f"  Number of request launchers in pool: {num_launchers} \n"
+        f"{max_response_log_str}\n"
+    )
     t0_utc = time.time()
 
     # Thread-safe collection of completed request metrics
@@ -278,6 +285,10 @@ def _log_progress_periodically(
 
         if total_done >= total_all:
             _log_lag_statistics(max_s, max_u, mean_s, mean_u, med_s, med_u)
+            if max_s > 1 or max_u > 1:
+                logger.error("Some requests had significant dispatch lag. Check logs for details.")
+            elif max_s > .05 or max_u > .05:
+                logger.warn("Some requests had more dispatch lag than expected. Check logs for details.")
             break
 
 
@@ -1036,7 +1047,6 @@ def run_token_benchmark(
             model=model,
             llm_api=llm_api,
             schedule_file=schedule_file,
-            num_concurrent_requests=num_concurrent_requests,
             results_dir=results_dir,
             additional_sampling_params=additional_sampling_params,
             use_subdir=schedule_file_subdir,
