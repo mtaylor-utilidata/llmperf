@@ -469,8 +469,10 @@ def _launch_and_record_scheduled(
         for out in outs:
             request_metrics, gen_text, _ = out
 
+            response_mono = time.monotonic()
+            response_offset = response_mono - start_time_mono
+
             response_ts = time.time()
-            response_offset = response_ts - t0_utc
             response_ts_utc = datetime.utcfromtimestamp(response_ts).isoformat(timespec="milliseconds") + "Z"
 
             logger.debug(f"[request #{request_id}] Response received at offset {response_offset:.3f}s")
