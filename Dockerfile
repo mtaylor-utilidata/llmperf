@@ -22,6 +22,15 @@ RUN python3.10 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip setuptools wheel && \
     /opt/venv/bin/pip install -e .
 
+# --- Default environment variables ---
+# Default OpenAI-compatible endpoint (can be overridden with -e)
+ENV OPENAI_API_BASE=http://localhost:8000/v1
+
+# The API key should be provided at runtime for security
+# Providing stub default value to avoid errors during installation
+ENV OPENAI_API_KEY="stub_key"
+
+# Ensure venv and environment behave like a clean Python install
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
