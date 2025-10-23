@@ -910,6 +910,10 @@ def finalize_request_metrics(request_metrics, gen_text, common_metrics, get_toke
         else 0
     )
 
+    # if request id is provided add to common metrics
+    if request_id is not None:
+        request_metrics[common_metrics.REQUEST_ID] = request_id
+
     return request_metrics
 
 
