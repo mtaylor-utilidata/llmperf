@@ -127,6 +127,14 @@ def build_scheduled_sonnet_prompt(
     idxs = list(range(len(SONNET_LINES)))
     random.shuffle(idxs)
 
+    # Extend the index list until it can cover the remaining tokens
+    total_sonnet_tokens = sum(SONNET_TOKEN_COUNTS)
+    while total_sonnet_tokens < remaining:
+        extra = list(range(len(SONNET_LINES)))
+        random.shuffle(extra)
+        idxs.extend(extra)
+        total_sonnet_tokens += sum(SONNET_TOKEN_COUNTS)
+
     for i in idxs:
         if remaining <= 0:
             break
@@ -150,8 +158,7 @@ def build_scheduled_sonnet_prompt(
         remaining -= line_tokens
         total_tokens += line_tokens
 
-    return "".join(prompt_parts), total_tokens
-
+    return "".join(prompt_parts), total_tokens #TODO: use the tokenizer for a final verification and adjust. Due to line endings causing tokenization differences.
 
 
 def randomly_sample_sonnet_lines_prompt(

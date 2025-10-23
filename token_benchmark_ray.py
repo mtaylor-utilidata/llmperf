@@ -424,6 +424,7 @@ def _launch_and_record_scheduled(
         output_tokens=sched["output_tokens"],
         tokenizer=tokenizer
     )
+
     sampling_params = {"max_tokens": sched["output_tokens"]}
     sampling_params.update(json.loads(additional_sampling_params))
 
