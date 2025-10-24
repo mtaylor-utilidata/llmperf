@@ -60,6 +60,7 @@ def run_schedule_mode(
         results_subdir_path = Path(results_dir)
 
     # Copy schedule file to results directory for reference
+    results_subdir_path.mkdir(parents=True, exist_ok=True)
     copyfile(schedule_file, results_subdir_path / "schedule.csv")
 
     # Create output directory and copy schedule file
