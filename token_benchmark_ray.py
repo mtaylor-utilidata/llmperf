@@ -83,6 +83,18 @@ def run_schedule_mode(
         clients = construct_clients(llm_api=llm_api, num_clients=1)
         launcher_pool.put(RequestsLauncher(clients))
 
+    logger.info("Tokenizing the largest request up front to warm up tokenizer...")
+    # Warm up tokenizer with largest request
+    tokenizer_warmup_start = time.monotonic()
+    max_input_tokens = max(r["input_tokens"] for r in schedule_sampled)
+    _ = build_scheduled_sonnet_prompt(
+        input_tokens=max_input_tokens,
+        output_tokens=500,
+        tokenizer=tokenizer
+    )
+    tokenizer_warmup_end = time.monotonic()
+    logger.info(f"Tokenizer warmup completed in {tokenizer_warmup_end - tokenizer_warmup_start:.3f}s")
+
     delay = 5
     start_time_mono = time.monotonic() + delay
     launch_time = datetime.fromtimestamp(time.time() + delay, tz=timezone.utc)
