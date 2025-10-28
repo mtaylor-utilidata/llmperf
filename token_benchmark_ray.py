@@ -437,7 +437,7 @@ def _launch_and_record_scheduled(
     )
 
     prep_end = time.monotonic()
-    logger.debug(f"[request #{request_id}] Request prep completed with duration {prep_end - prep_start:.3f}s")
+    logger.debug(f"[request #{request_id}] Sampled request prep completed with duration {prep_end - prep_start:.3f}s")
 
     # Final sleep until scheduled time
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
@@ -458,7 +458,7 @@ def _launch_and_record_scheduled(
         with dispatch_stats_sampled_lock:
             dispatch_stats_sampled["lags"].append(dispatch_lag)
 
-        logger.debug(f"[request #{request_id}] Dispatch confirmed at offset {dispatch_offset:.3f}s "
+        logger.debug(f"[request #{request_id}] Sampled request dispatch confirmed at offset {dispatch_offset:.3f}s "
               f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)")
 
         # Collect response(s) for this launcher
@@ -533,7 +533,7 @@ def _run_unsampled_records(
 
     # --- Sleep until ~10s before scheduled time to prep request ---
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - 0.1))
-    logger.debug(f"[request #{sched['request_id']}][unsampled] Preparing unsampled dispatch...")
+    # logger.debug(f"[request #{sched['request_id']}][unsampled] Preparing unsampled dispatch...")
 
     prep_start = time.monotonic()
 
@@ -547,7 +547,7 @@ def _run_unsampled_records(
     sampling_params.update(json.loads(additional_sampling_params))
 
 
-    logger.debug(f"[request #{request_id}][unsampled] Request prep completed with duration {time.monotonic() - prep_start:.3f}s")
+    # logger.debug(f"[request #{request_id}][unsampled] Request prep completed with duration {time.monotonic() - prep_start:.3f}s")
 
     # --- Final sleep to align with schedule precisely ---
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
@@ -561,10 +561,10 @@ def _run_unsampled_records(
     with dispatch_stats_unsampled_lock:
         dispatch_stats_unsampled["lags"].append(dispatch_lag)
 
-    logger.debug(
-        f"[request #{request_id}][unsampled] Dispatching fire-and-forget at offset {dispatch_offset:.3f}s "
-        f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)"
-    )
+    # logger.debug(
+    #     f"[request #{request_id}][unsampled] Dispatching fire-and-forget at offset {dispatch_offset:.3f}s "
+    #     f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)"
+    # )
 
 
     # --- Dispatch logic (non-streaming, best-effort) ---

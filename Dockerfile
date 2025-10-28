@@ -18,9 +18,9 @@ WORKDIR /app
 COPY . .
 
 # Create virtual env and install llmperf
-RUN python3.10 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --upgrade pip setuptools wheel && \
-    /opt/venv/bin/pip install -e .
+RUN python3.10 -m venv /opt/venv
+RUN /opt/venv/bin/pip install --upgrade pip setuptools wheel
+RUN /opt/venv/bin/pip install -e .
 
 # --- Default environment variables ---
 # Default OpenAI-compatible endpoint (can be overridden with -e)
@@ -35,7 +35,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-ENTRYPOINT ["python", "token_benchmark_ray.py"]
+ENTRYPOINT ["python", "token_benchmark_ray.py", "--log-level", "DEBUG"]
 
 
 
