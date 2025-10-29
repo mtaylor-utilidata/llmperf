@@ -41,7 +41,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-ENTRYPOINT ["python", "token_benchmark_ray.py", "--log-level", "DEBUG"]
+ENTRYPOINT ["python", "token_benchmark_ray.py"]
 
 
 
