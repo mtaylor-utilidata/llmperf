@@ -84,6 +84,7 @@ def run_schedule_mode(
         launcher_pool.put(RequestsLauncher(clients))
 
     logger.info("Tokenizing the largest request up front to warm up tokenizer...")
+
     # Warm up tokenizer with largest request
     tokenizer_warmup_start = time.monotonic()
     max_input_tokens = max(r["input_tokens"] for r in schedule_sampled)
@@ -95,7 +96,7 @@ def run_schedule_mode(
     tokenizer_warmup_end = time.monotonic()
     logger.info(f"Tokenizer warmup completed in {tokenizer_warmup_end - tokenizer_warmup_start:.3f}s")
 
-    delay = 5
+    delay = 15  # the threads start waking 10s before their scheduled time to prep so we want this to be longer than that
     start_time_mono = time.monotonic() + delay
     launch_time = datetime.fromtimestamp(time.time() + delay, tz=timezone.utc)
     max_response_log_str = f"  Schedule should continue on track as long as requests don't exceed ~{num_launchers / max_sampled_requests_per_second}s e2e latency on average." if num_launchers < len(schedule_sampled) else ""

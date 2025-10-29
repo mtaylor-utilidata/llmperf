@@ -15,12 +15,16 @@ RUN apt-get update && apt-get install -y software-properties-common && \
         && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
+
+# Copy only dependency-defining files first for caching
+COPY pyproject.toml ./
 
 # Create virtual env and install llmperf
 RUN python3.10 -m venv /opt/venv
 RUN /opt/venv/bin/pip install --upgrade pip setuptools wheel
 RUN /opt/venv/bin/pip install -e .
+
+COPY . .
 
 # --- Default environment variables ---
 # Default OpenAI-compatible endpoint (can be overridden with -e)
