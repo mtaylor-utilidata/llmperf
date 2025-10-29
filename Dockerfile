@@ -26,6 +26,8 @@ RUN /opt/venv/bin/pip install -e .
 
 COPY . .
 
+RUN /opt/venv/bin/pip install -e .
+
 # --- Default environment variables ---
 # Default OpenAI-compatible endpoint (can be overridden with -e)
 ENV OPENAI_API_BASE=http://localhost:8000/v1
