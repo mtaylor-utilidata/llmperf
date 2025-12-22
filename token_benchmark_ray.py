@@ -552,7 +552,7 @@ def _run_unsampled_records(
     prep_start = time.monotonic()
 
     # --- Prepare request payload ---
-    prompt = build_scheduled_sonnet_prompt(
+    prompt, _ = build_scheduled_sonnet_prompt(
         input_tokens=sched["input_tokens"],
         output_tokens=sched["output_tokens"],
         tokenizer=tokenizer
