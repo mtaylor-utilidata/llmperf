@@ -47,6 +47,7 @@ def run_schedule_mode(
         additional_sampling_params: str,
         max_sampled_requests_per_second: int = 15,
         use_subdir: bool = True,
+        max_ray_workers: int = 700,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """
     Dispatch requests using a schedule file with delta timestamps.
@@ -77,7 +78,7 @@ def run_schedule_mode(
     schedule_sampled, schedule_not_sampled = _sample_schedule_records(schedule, max_sampled_requests_per_second)
 
     # Build a pool of launchers
-    num_launchers = min(700, len(schedule_sampled))
+    num_launchers = min(max_ray_workers, len(schedule_sampled))
     launcher_pool = Queue(maxsize=num_launchers)
     for _ in range(num_launchers):
         clients = construct_clients(llm_api=llm_api, num_clients=1)
@@ -587,8 +588,14 @@ def _run_unsampled_records(
             body = {
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": ""},
-                    {"role": "user", "content": prompt},
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": ""}],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": prompt}],
+                    },
                 ],
                 "stream": False,
             }
@@ -1046,6 +1053,7 @@ def run_token_benchmark(
     schedule_file: str = "", # optional; when set we route through the schedule branch
     schedule_file_subdir: bool = True,
     max_sampled_requests_per_second: int = 15,
+    max_ray_workers: int = 700,
 ):
     """
     Args:
@@ -1083,7 +1091,8 @@ def run_token_benchmark(
             results_dir=results_dir,
             additional_sampling_params=additional_sampling_params,
             use_subdir=schedule_file_subdir,
-            max_sampled_requests_per_second=max_sampled_requests_per_second
+            max_sampled_requests_per_second=max_sampled_requests_per_second,
+            max_ray_workers=max_ray_workers
         )
 
         # Update to summary.
@@ -1288,6 +1297,16 @@ args.add_argument(
 )
 
 args.add_argument(
+    "--max-ray-workers",
+    type=int,
+    default=700,
+    help=(
+        "Max number of ray workers on a schedule file run"
+        "(default: %(default)s)"
+    ),
+)
+
+args.add_argument(
     "--log-level",
     type=str,
     default="INFO",
@@ -1369,5 +1388,6 @@ if __name__ == "__main__":
         user_metadata=user_metadata,
         schedule_file=args.schedule_file,
         schedule_file_subdir=args.schedule_file_subdir,
-        max_sampled_requests_per_second=args.max_sampled_requests_per_second
+        max_sampled_requests_per_second=args.max_sampled_requests_per_second,
+        max_ray_workers=args.max_ray_workers,
     )
