@@ -12,6 +12,9 @@ import boto3
 import logging
 import sys
 import statistics
+import asyncio
+import threading
+import httpx
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -37,6 +40,42 @@ from llmperf.utils import (
     LLMPerfResults,
     sample_random_positive_int,
 )
+
+_async_loop = None
+_async_client = None
+
+def _start_async_loop():
+    global _async_loop, _async_client
+
+    _async_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_async_loop)
+
+    _async_client = httpx.AsyncClient(
+        timeout=60,
+        limits=httpx.Limits(
+            max_connections=2000,
+            max_keepalive_connections=500,
+        ),
+    )
+
+    _async_loop.run_forever()
+
+def init_async_dispatcher():
+    t = threading.Thread(target=_start_async_loop, daemon=True)
+    t.start()
+
+async def _async_post(url, json_body, headers):
+    try:
+        await _async_client.post(url, json=json_body, headers=headers)
+    except Exception:
+        # best-effort, swallow or log
+        pass
+
+def fire_and_forget_post(url, json_body, headers):
+    asyncio.run_coroutine_threadsafe(
+        _async_post(url, json_body, headers),
+        _async_loop,
+    )
 
 def run_schedule_mode(
         *,
@@ -83,6 +122,10 @@ def run_schedule_mode(
     for _ in range(num_launchers):
         clients = construct_clients(llm_api=llm_api, num_clients=1)
         launcher_pool.put(RequestsLauncher(clients))
+
+    # Initialize the async dispatcher for unsampled records
+    init_async_dispatcher()
+
 
     logger.info("Tokenizing the largest request up front to warm up tokenizer...")
 
@@ -613,7 +656,7 @@ def _run_unsampled_records(
                     address += "/"
                 address += "chat/completions"
                 headers = {"Authorization": f"Bearer {key}"}
-                requests.post(address, json=body, headers=headers, timeout=60)
+                fire_and_forget_post(address, body, headers)
 
             with unsampled_lock:
                 unsampled_counter["count"] += 1
@@ -662,7 +705,7 @@ def _run_unsampled_records(
                 "instances": [{"prompt": prompt}],
                 "parameters": sampling_params,
             }
-            requests.post(url, headers=headers, data=json.dumps(data), timeout=60)
+            fire_and_forget_post(address, body, headers)
             with unsampled_lock:
                 unsampled_counter["count"] += 1
 
