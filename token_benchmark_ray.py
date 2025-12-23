@@ -67,8 +67,8 @@ def init_async_dispatcher():
 async def _async_post(url, json_body, headers):
     try:
         await _async_client.post(url, json=json_body, headers=headers)
-    except Exception:
-        # best-effort, swallow or log
+    except Exception as e:
+        logger.error(f"Request failed to send with exception: {e}")
         pass
 
 def fire_and_forget_post(url, json_body, headers):
