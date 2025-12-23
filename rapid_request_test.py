@@ -161,7 +161,6 @@ async def fire(
         idx,
         prepared,
         lags,
-        conn_sem,
 ):
     loop = asyncio.get_running_loop()
 
@@ -192,17 +191,17 @@ async def fire(
         lag,
     )
 
-    # --- bounded fire-and-forget ---
-    async with conn_sem:
-        try:
-            async with client.stream(
-                    "POST",
-                    "/chat/completions",
-                    json=body,
-            ):
-                pass
-        except Exception as e:
-            log.debug("dispatch failed idx=%d: %s", idx, e)
+    # --- open-loop, best-effort dispatch ---
+    try:
+        async with client.stream(
+                "POST",
+                "/chat/completions",
+                json=body,
+        ):
+            pass
+    except Exception as e:
+        # This is EXPECTED under overload
+        log.debug("dispatch error idx=%d: %s", idx, e)
 
 
 # ---------------- stats ----------------
@@ -249,9 +248,10 @@ async def main(host, csv_path, api_key, model):
     loop = asyncio.get_running_loop()
     start_time = loop.time() + 5
 
-    limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
-
-    gc.disable()
+    limits = httpx.Limits(
+        max_connections=1024,
+        max_keepalive_connections=1024,
+    )
 
     async with httpx.AsyncClient(
             base_url=host,
