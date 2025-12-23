@@ -19,6 +19,8 @@ import httpx
 from src.llmperf.utils import build_scheduled_sonnet_prompt
 
 
+MAX_IN_FLIGHT = 512
+
 # ------- Tokenizer helper constants ------
 
 _tokenizer_cache = {}
@@ -159,6 +161,7 @@ async def fire(
         idx,
         prepared,
         lags,
+        conn_sem,
 ):
     loop = asyncio.get_running_loop()
 
@@ -189,17 +192,17 @@ async def fire(
         lag,
     )
 
-    # --- true fire-and-forget dispatch ---
-    try:
-        async with client.stream(
-                "POST",
-                "/chat/completions",
-                json=body,
-        ):
-            pass  # do NOT read response
-    except Exception as e:
-        # Never fail the run on dispatch errors
-        log.debug("dispatch failed idx=%d: %s", idx, e)
+    # --- bounded fire-and-forget ---
+    async with conn_sem:
+        try:
+            async with client.stream(
+                    "POST",
+                    "/chat/completions",
+                    json=body,
+            ):
+                pass
+        except Exception as e:
+            log.debug("dispatch failed idx=%d: %s", idx, e)
 
 
 # ---------------- stats ----------------
@@ -265,6 +268,8 @@ async def main(host, csv_path, api_key, model):
 
         reporter = asyncio.create_task(lag_reporter(lags))
 
+        conn_sem = asyncio.Semaphore(MAX_IN_FLIGHT)
+
         dispatch_tasks = [
             asyncio.create_task(
                 fire(
@@ -273,6 +278,7 @@ async def main(host, csv_path, api_key, model):
                     idx,
                     prepared,
                     lags,
+                    conn_sem
                     )
             )
             for idx, row in enumerate(schedule)
