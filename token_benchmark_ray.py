@@ -107,7 +107,7 @@ def run_schedule_mode(
     log_fh = open(results_subdir_path / "requests_sent.log", "a")
 
     # Load tokenizer
-    tokenizer = get_tokenizer_for_model(model)
+    tokenizer = get_tokenizer_for_model(model, logger)
     get_token_length = lambda text: len(tokenizer.encode(text))
 
     # Read and parse the schedule CSV
@@ -764,7 +764,7 @@ def get_token_throughput_latencies(
     """
     random.seed(11111)
 
-    tokenizer = get_tokenizer_for_model(model)
+    tokenizer = get_tokenizer_for_model(model, logger)
     get_token_length = lambda text: len(tokenizer.encode(text))
 
     if not additional_sampling_params:
@@ -893,7 +893,7 @@ KNOWN_TOKENIZERS = {
     "text-davinci": lambda: tiktoken.get_encoding("p50k_base") if tiktoken else None,
 }
 
-def get_tokenizer_for_model(model_name: str):
+def get_tokenizer_for_model(model_name: str, log):
     """
     Attempts to load a tokenizer for a given model name.
     1. Tries known local mappings (e.g. OpenAI/tiktoken)
@@ -908,23 +908,23 @@ def get_tokenizer_for_model(model_name: str):
         if key in model_name.lower():
             tokenizer = fn()
             if tokenizer:
-                logger.info(f"Using known tokenizer for model '{model_name}': {key}")
-                logger.info(f"Tokenizer type: {type(tokenizer)}")
+                log.info(f"Using known tokenizer for model '{model_name}': {key}")
+                log.info(f"Tokenizer type: {type(tokenizer)}")
                 _tokenizer_cache[model_name] = tokenizer
                 return tokenizer
             else:
-                logger.warning(
+                log.warning(
                     f"Known tokenizer for '{model_name}' requires `tiktoken` but it’s not installed."
                 )
 
     # 2. Hugging Face fallback
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-        logger.info(f"Loaded HF tokenizer for model '{model_name}'.")
+        log.info(f"Loaded HF tokenizer for model '{model_name}'.")
         _tokenizer_cache[model_name] = tokenizer
         return tokenizer
     except Exception as e:
-        logger.warning(
+        log.warning(
             f"Failed to load tokenizer for '{model_name}' from Hugging Face ({e}). "
             "Falling back to LlamaTokenizerFast."
         )
@@ -932,7 +932,7 @@ def get_tokenizer_for_model(model_name: str):
     # 3. Llama fallback
     tokenizer = LlamaTokenizerFast.from_pretrained("hf-internal-testing/llama-tokenizer")
     _tokenizer_cache[model_name] = tokenizer
-    logger.warning(f"USING THE FALLBACK 'LlamaTokenizerFast' TOKENIZER MAY RESULT IN INACCURATE TOKEN COUNTS WHEN USED WITH A MODEL WHICH USES A DIFFERENT TOKENIZER.")
+    log.warning(f"USING THE FALLBACK 'LlamaTokenizerFast' TOKENIZER MAY RESULT IN INACCURATE TOKEN COUNTS WHEN USED WITH A MODEL WHICH USES A DIFFERENT TOKENIZER.")
     return tokenizer
 
 def finalize_request_metrics(request_metrics, gen_text, common_metrics, get_token_length, request_id=None):

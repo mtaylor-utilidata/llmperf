@@ -1,0 +1,266 @@
+import asyncio
+import csv
+import logging
+import argparse
+import time
+import gc
+from pathlib import Path
+from statistics import mean
+
+import httpx
+
+from llmperf.utils import build_scheduled_sonnet_prompt
+from token_benchmark_ray import get_tokenizer_for_model
+
+# ---------------- logging ----------------
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s.%(msecs)03d %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+# ---------------- config ----------------
+
+PREP_WINDOW_SECONDS = 10.0
+FINAL_BUSY_WAIT = 0.001  # 1 ms
+
+# ---------------- CSV loading ----------------
+
+def load_schedule(csv_path: Path):
+    rows = []
+
+    with csv_path.open() as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:
+                continue
+            try:
+                delta = float(row[0])
+                input_toks = int(row[1])
+                output_toks = int(row[2])
+            except (ValueError, IndexError):
+                continue
+
+            rows.append(
+                {
+                    "delta": delta,
+                    "input_tokens": input_toks,
+                    "output_tokens": output_toks,
+                }
+            )
+
+    if not rows:
+        raise ValueError("No valid schedule rows found")
+
+    rows.sort(key=lambda r: r["delta"])
+    return rows
+
+# ---------------- warmup ----------------
+
+async def warmup_connections(client, model, n=8):
+    log.info("Warming up %d connections", n)
+    dummy = {
+        "model": model,
+        "messages": [{"role": "user", "content": "warmup"}],
+        "max_tokens": 1,
+    }
+    await asyncio.gather(
+        *[client.post("/chat/completions", json=dummy) for _ in range(n)],
+        return_exceptions=True,
+    )
+    log.info("Warmup complete")
+
+# ---------------- prep manager ----------------
+
+async def prep_manager(
+        schedule,
+        start_time,
+        tokenizer,
+        model,
+        prepared,
+        prep_times,
+):
+    """
+    Prepares request bodies for all schedule entries that fall
+    within the rolling prep window.
+    """
+    prompt_cache = {}
+    idx = 0
+    total = len(schedule)
+
+    while idx < total:
+        now = asyncio.get_running_loop().time()
+        window_limit = now + PREP_WINDOW_SECONDS
+
+        while idx < total and start_time + schedule[idx]["delta"] <= window_limit:
+            row = schedule[idx]
+            key = (row["input_tokens"], row["output_tokens"])
+
+            prep_start = time.perf_counter()
+
+            if key not in prompt_cache:
+                prompt, _ = build_scheduled_sonnet_prompt(
+                    input_tokens=row["input_tokens"],
+                    output_tokens=row["output_tokens"],
+                    tokenizer=tokenizer,
+                )
+                prompt_cache[key] = prompt
+
+            body = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt_cache[key]}],
+                "max_tokens": row["output_tokens"],
+            }
+
+            prep_dur = time.perf_counter() - prep_start
+            prep_times.append(prep_dur)
+
+            prepared[idx] = body
+            log.debug(
+                "prepared idx=%d input=%d output=%d prep_time=%.6f",
+                idx,
+                row["input_tokens"],
+                row["output_tokens"],
+                prep_dur,
+            )
+
+            idx += 1
+
+        await asyncio.sleep(0.01)  # yield, don't spin
+
+# ---------------- dispatch ----------------
+
+async def fire(
+        client,
+        scheduled_t,
+        idx,
+        prepared,
+        lags,
+):
+    loop = asyncio.get_running_loop()
+
+    # Wait until prepared
+    while idx not in prepared:
+        await asyncio.sleep(0)
+
+    body = prepared.pop(idx)
+
+    # Final alignment (never early)
+    while True:
+        now = loop.time()
+        if now >= scheduled_t - FINAL_BUSY_WAIT:
+            break
+        await asyncio.sleep(0)
+
+    while loop.time() < scheduled_t:
+        pass
+
+    dispatch_t = loop.time()
+    await client.post("/chat/completions", json=body)
+
+    lag = dispatch_t - scheduled_t
+    lags.append(lag)
+
+    log.debug(
+        "scheduled=%.9f dispatched=%.9f lag=%.9f",
+        scheduled_t,
+        dispatch_t,
+        lag,
+    )
+
+# ---------------- stats ----------------
+
+async def lag_reporter(lags):
+    while True:
+        await asyncio.sleep(10)
+        if not lags:
+            continue
+        log.info(
+            "lag stats (n=%d): avg=%.6f min=%.6f max=%.6f",
+            len(lags),
+            sum(lags) / len(lags),
+            min(lags),
+            max(lags),
+            )
+
+def print_final_stats(lags, prep_times):
+    print("\n" + "=" * 80)
+    print("FINAL STATS")
+    print("=" * 80)
+    print(f"requests        : {len(lags)}")
+    print(f"avg dispatch lag: {sum(lags)/len(lags):.9f}s")
+    print(f"min dispatch lag: {min(lags):.9f}s")
+    print(f"max dispatch lag: {max(lags):.9f}s")
+    print(f"avg prep time   : {sum(prep_times)/len(prep_times):.6f}s")
+    print("=" * 80 + "\n")
+
+# ---------------- main ----------------
+
+async def main(host, csv_path, api_key, model):
+    schedule = load_schedule(csv_path)
+    tokenizer = get_tokenizer_for_model(model, log=log)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    lags = []
+    prep_times = []
+    prepared = {}
+
+    loop = asyncio.get_running_loop()
+    start_time = loop.time() + 5
+
+    limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
+
+    gc.disable()
+
+    async with httpx.AsyncClient(
+            base_url=host,
+            headers=headers,
+            timeout=None,
+            limits=limits,
+            http2=False,
+    ) as client:
+        await warmup_connections(client, model)
+
+        prep_task = asyncio.create_task(
+            prep_manager(schedule, start_time, tokenizer, model, prepared, prep_times)
+        )
+
+        reporter = asyncio.create_task(lag_reporter(lags))
+
+        dispatch_tasks = [
+            asyncio.create_task(
+                fire(
+                    client,
+                    start_time + row["delta"],
+                    idx,
+                    prepared,
+                    lags,
+                    )
+            )
+            for idx, row in enumerate(schedule)
+        ]
+
+        await asyncio.gather(*dispatch_tasks)
+        prep_task.cancel()
+        reporter.cancel()
+
+    gc.enable()
+    print_final_stats(lags, prep_times)
+
+# ---------------- entry ----------------
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--host", required=True)
+    p.add_argument("--csv", required=True)
+    p.add_argument("--api-key", default="DUMMY")
+    p.add_argument("--model", required=True)
+    args = p.parse_args()
+
+    asyncio.run(main(args.host, Path(args.csv), args.api_key, args.model))
