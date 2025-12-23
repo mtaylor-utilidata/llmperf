@@ -6,11 +6,32 @@ import time
 import gc
 from pathlib import Path
 from statistics import mean
+from transformers import AutoTokenizer, LlamaTokenizerFast
+
+# Optional: import tiktoken if available
+try:
+    import tiktoken
+except ImportError:
+    tiktoken = None
 
 import httpx
 
-from llmperf.utils import build_scheduled_sonnet_prompt
-from token_benchmark_ray import get_tokenizer_for_model
+from src.llmperf.utils import build_scheduled_sonnet_prompt
+
+
+# ------- Tokenizer helper constants ------
+
+_tokenizer_cache = {}
+# Map of known model substrings → tokenizer loader function
+KNOWN_TOKENIZERS = {
+    # OpenAI models use tiktoken
+    "gpt-4o": lambda: tiktoken.get_encoding("o200k_base") if tiktoken else None,
+    "gpt-4-turbo": lambda: tiktoken.get_encoding("o200k_base") if tiktoken else None,
+    "gpt-4": lambda: tiktoken.get_encoding("cl100k_base") if tiktoken else None,
+    "gpt-3.5": lambda: tiktoken.get_encoding("cl100k_base") if tiktoken else None,
+    "text-davinci": lambda: tiktoken.get_encoding("p50k_base") if tiktoken else None,
+}
+
 
 # ---------------- logging ----------------
 
@@ -252,6 +273,50 @@ async def main(host, csv_path, api_key, model):
 
     gc.enable()
     print_final_stats(lags, prep_times)
+
+# ------------ Get Tokenizer for model -----------
+def get_tokenizer_for_model(model_name: str, log):
+    """
+    Attempts to load a tokenizer for a given model name.
+    1. Tries known local mappings (e.g. OpenAI/tiktoken)
+    2. Then tries Hugging Face AutoTokenizer
+    3. Falls back to LlamaTokenizerFast
+    """
+    if model_name in _tokenizer_cache:
+        return _tokenizer_cache[model_name]
+
+    # 1. Known special cases (OpenAI, etc.)
+    for key, fn in KNOWN_TOKENIZERS.items():
+        if key in model_name.lower():
+            tokenizer = fn()
+            if tokenizer:
+                log.info(f"Using known tokenizer for model '{model_name}': {key}")
+                log.info(f"Tokenizer type: {type(tokenizer)}")
+                _tokenizer_cache[model_name] = tokenizer
+                return tokenizer
+            else:
+                log.warning(
+                    f"Known tokenizer for '{model_name}' requires `tiktoken` but it’s not installed."
+                )
+
+    # 2. Hugging Face fallback
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+        log.info(f"Loaded HF tokenizer for model '{model_name}'.")
+        _tokenizer_cache[model_name] = tokenizer
+        return tokenizer
+    except Exception as e:
+        log.warning(
+            f"Failed to load tokenizer for '{model_name}' from Hugging Face ({e}). "
+            "Falling back to LlamaTokenizerFast."
+        )
+
+    # 3. Llama fallback
+    tokenizer = LlamaTokenizerFast.from_pretrained("hf-internal-testing/llama-tokenizer")
+    _tokenizer_cache[model_name] = tokenizer
+    log.warning(f"USING THE FALLBACK 'LlamaTokenizerFast' TOKENIZER MAY RESULT IN INACCURATE TOKEN COUNTS WHEN USED WITH A MODEL WHICH USES A DIFFERENT TOKENIZER.")
+    return tokenizer
+
 
 # ---------------- entry ----------------
 
