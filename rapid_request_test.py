@@ -278,7 +278,6 @@ async def main(host, csv_path, api_key, model):
                     idx,
                     prepared,
                     lags,
-                    conn_sem
                     )
             )
             for idx, row in enumerate(schedule)
