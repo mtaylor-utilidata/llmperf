@@ -179,8 +179,6 @@ async def fire(
         pass
 
     dispatch_t = loop.time()
-    await client.post("/chat/completions", json=body)
-
     lag = dispatch_t - scheduled_t
     lags.append(lag)
 
@@ -190,6 +188,19 @@ async def fire(
         dispatch_t,
         lag,
     )
+
+    # --- true fire-and-forget dispatch ---
+    try:
+        async with client.stream(
+                "POST",
+                "/chat/completions",
+                json=body,
+        ):
+            pass  # do NOT read response
+    except Exception as e:
+        # Never fail the run on dispatch errors
+        log.debug("dispatch failed idx=%d: %s", idx, e)
+
 
 # ---------------- stats ----------------
 
