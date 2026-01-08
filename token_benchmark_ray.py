@@ -5,10 +5,7 @@ import math
 import os
 import random
 import re
-import threading
 import time
-import requests
-import boto3
 import logging
 import sys
 import statistics
@@ -43,9 +40,35 @@ from llmperf.utils import (
 
 _async_loop = None
 _async_client = None
+_async_queue = None
+ASYNC_DISPATCHER_WORKERS = 500  # tune this
+
+
+FATAL_ERROR = threading.Event()
+FATAL_ERROR_EXC = None
+
+def trigger_fatal(e: BaseException):
+    global FATAL_ERROR_EXC
+    if not FATAL_ERROR.is_set():
+        FATAL_ERROR_EXC = e
+        FATAL_ERROR.set()
+        logger.critical("!!! FATAL ERROR !!! — aborting run", exc_info=e)
+
+
+async def _async_dispatcher():
+    while True:
+        try:
+            url, json_body, headers = await _async_queue.get()
+            await _async_client.post(url, json=json_body, headers=headers)
+        except Exception as e:
+            trigger_fatal(e)
+            raise
+        finally:
+            _async_queue.task_done()
+
 
 def _start_async_loop():
-    global _async_loop, _async_client
+    global _async_loop, _async_client, _async_queue
 
     _async_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_async_loop)
@@ -58,24 +81,29 @@ def _start_async_loop():
         ),
     )
 
+    _async_queue = asyncio.Queue()
+
+    for _ in range(ASYNC_DISPATCHER_WORKERS):
+        _async_loop.create_task(_async_dispatcher())
+
     _async_loop.run_forever()
 
 def init_async_dispatcher():
     t = threading.Thread(target=_start_async_loop, daemon=True)
     t.start()
 
-async def _async_post(url, json_body, headers):
-    try:
-        await _async_client.post(url, json=json_body, headers=headers)
-    except Exception as e:
-        logger.error(f"Request failed to send with exception: {e}")
-        pass
 
 def fire_and_forget_post(url, json_body, headers):
-    asyncio.run_coroutine_threadsafe(
-        _async_post(url, json_body, headers),
-        _async_loop,
-    )
+    if FATAL_ERROR.is_set():
+        return
+
+    def _enqueue():
+        _async_queue.put_nowait((url, json_body, headers))
+        qsize = _async_queue.qsize()
+        if qsize > 1:
+            logger.warning(f"⚠️ UNSAMPLED BACKLOG: {_async_queue.qsize()} requests queued")
+
+    _async_loop.call_soon_threadsafe(_enqueue)
 
 def run_schedule_mode(
         *,
@@ -113,8 +141,9 @@ def run_schedule_mode(
     # Read and parse the schedule CSV
     schedule = _load_schedule(schedule_file)
 
-    # --- NEW: apply sampling before any threads are allocated ---
-    schedule_sampled, schedule_not_sampled = _sample_schedule_records(schedule, max_sampled_requests_per_second)
+    schedule_sampled, schedule_not_sampled = _sample_schedule_records(
+        schedule, max_sampled_requests_per_second
+    )
 
     # Build a pool of launchers
     num_launchers = min(max_ray_workers, len(schedule_sampled))
@@ -148,6 +177,7 @@ def run_schedule_mode(
     logger.info(
         f"\n*** Scheduled launch starting in {delay}s at {launch_time.isoformat(timespec='seconds')} *** \n"
         f"  Total sampled requests to launch: {len(schedule_sampled)} \n"
+        f"  Total unsampled requests to launch: {len(schedule_not_sampled)} \n"
         f"  Max number of requests measured per second: {max_sampled_requests_per_second} \n"
         f"  Number of request launchers in pool: {num_launchers} \n"
         f"{max_response_log_str}\n"
@@ -228,7 +258,9 @@ def run_schedule_mode(
             dispatch_stats_unsampled,
             dispatch_stats_unsampled_lock,
             dispatch_stats_sampled_lock,
-            launcher_pool
+            launcher_pool,
+            executor_sampled,
+            executor_unsampled
         ),
         daemon=True,
     )
@@ -237,7 +269,12 @@ def run_schedule_mode(
     # --- Wait for both to complete ---
     executor_sampled.shutdown(wait=True)
     executor_unsampled.shutdown(wait=True)
-    progress_thread.join(timeout=2.0)  # allow it to exit cleanly
+
+    if FATAL_ERROR.is_set():
+        raise RuntimeError("Schedule aborted due to fatal async error") from FATAL_ERROR_EXC
+
+    progress_thread.join(timeout=2.0)
+
     log_fh.close()
 
     time.sleep(2)  # ensure all logs are flushed
@@ -271,6 +308,8 @@ def _log_progress_periodically(
         dispatch_stats_unsampled_lock=None,
         dispatch_stats_sampled_lock=None,
         launcher_pool=None,
+        executor_sampled=None,
+        executor_unsampled=None,
 ):
     """Logs progress and dispatch timing stats every few seconds."""
 
@@ -288,6 +327,15 @@ def _log_progress_periodically(
         time.sleep(interval_s)
         now = time.monotonic()
         elapsed = (now - start_time_mono) if start_time_mono else 0.0
+
+        # --- Check for fatal errors ---
+
+        if FATAL_ERROR.is_set():
+            logger.critical("Fatal error detected — shutting down executors")
+
+            executor_sampled.shutdown(wait=False, cancel_futures=True)
+            executor_unsampled.shutdown(wait=False, cancel_futures=True)
+            return
 
         # --- Count progress ---
         with completed_lock:
@@ -468,13 +516,20 @@ def _launch_and_record_scheduled(
         dispatch_stats_sampled: Dict[str, List[float]],
         dispatch_stats_sampled_lock: threading.Lock,
 ):
+    if FATAL_ERROR.is_set():
+        return
+
     request_id = sched["request_id"]
     scheduled_offset = sched["scheduled_offset_s"]
 
     # Sleep until ~10s before scheduled time to prep work
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - .1))  #.1s prep buffer
-    prep_start = time.monotonic()
 
+    # Again after sleep
+    if FATAL_ERROR.is_set():
+        return
+
+    prep_start = time.monotonic()
 
     # Prepare request inputs and configs
     prompt = build_scheduled_sonnet_prompt(
@@ -578,19 +633,18 @@ def _run_unsampled_records(
         dispatch_stats_unsampled: Dict[str, List[float]],
         dispatch_stats_unsampled_lock: threading.Lock,
 ):
-    """
-    Fire-and-forget version of scheduled request launcher.
-    Does not stream, collect metrics, or use Ray — just dispatches a request
-    to fully load the backend and logs the dispatch timestamp.
-    """
-
+    if FATAL_ERROR.is_set():
+        return
 
     request_id = sched["request_id"]
     scheduled_offset = sched["scheduled_offset_s"]
 
     # --- Sleep until ~10s before scheduled time to prep request ---
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic() - 0.1))
-    # logger.debug(f"[request #{sched['request_id']}][unsampled] Preparing unsampled dispatch...")
+
+    # Again after sleeping
+    if FATAL_ERROR.is_set():
+        return
 
     prep_start = time.monotonic()
 
@@ -602,9 +656,6 @@ def _run_unsampled_records(
     )
     sampling_params = {"max_tokens": sched["output_tokens"]}
     sampling_params.update(json.loads(additional_sampling_params))
-
-
-    # logger.debug(f"[request #{request_id}][unsampled] Request prep completed with duration {time.monotonic() - prep_start:.3f}s")
 
     # --- Final sleep to align with schedule precisely ---
     time.sleep(max(0, start_time_mono + scheduled_offset - time.monotonic()))
@@ -618,94 +669,31 @@ def _run_unsampled_records(
     with dispatch_stats_unsampled_lock:
         dispatch_stats_unsampled["lags"].append(dispatch_lag)
 
-    # logger.debug(
-    #     f"[request #{request_id}][unsampled] Dispatching fire-and-forget at offset {dispatch_offset:.3f}s "
-    #     f"(scheduled: {scheduled_offset:.3f}s, lag: {dispatch_lag:+.3f}s)"
-    # )
-
-
-    # --- Dispatch logic (non-streaming, best-effort) ---
     try:
-        if llm_api in ("litellm", "openai"):
+        if llm_api in ("openai"):
             # Shared OpenAI-style request
             body = {
                 "model": model,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": [{"type": "text", "text": ""}],
-                    },
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": prompt}],
-                    },
+                    {"role": "system", "content": [{"type": "text", "text": ""}]},
+                    {"role": "user", "content": [{"type": "text", "text": prompt}]},
                 ],
                 "stream": False,
             }
             body.update(sampling_params or {})
 
-            if llm_api == "litellm":
-                from litellm import completion
-                completion(**body)
-            else:
-                address = os.environ.get("OPENAI_API_BASE")
-                key = os.environ.get("OPENAI_API_KEY")
-                if not address or not key:
-                    raise ValueError("Missing OPENAI_API_BASE or OPENAI_API_KEY.")
-                if not address.endswith("/"):
-                    address += "/"
-                address += "chat/completions"
-                headers = {"Authorization": f"Bearer {key}"}
-                fire_and_forget_post(address, body, headers)
+            address = os.environ.get("OPENAI_API_BASE")
+            key = os.environ.get("OPENAI_API_KEY")
+            if not address or not key:
+                raise ValueError("Missing OPENAI_API_BASE or OPENAI_API_KEY.")
 
-            with unsampled_lock:
-                unsampled_counter["count"] += 1
+            if not address.endswith("/"):
+                address += "/"
+            address += "chat/completions"
 
-        elif llm_api == "sagemaker":
-            region = os.environ.get("AWS_REGION_NAME")
-            if not region:
-                raise ValueError("AWS_REGION_NAME must be set for SageMaker.")
-            sm_runtime = boto3.client("sagemaker-runtime", region_name=region)
-            message = {
-                "inputs": [
-                    [
-                        {"role": "system", "content": ""},
-                        {"role": "user", "content": prompt},
-                    ]
-                ],
-                "parameters": sampling_params,
-            }
-            sm_runtime.invoke_endpoint(
-                EndpointName=model,
-                ContentType="application/json",
-                Body=json.dumps(message),
-                CustomAttributes="accept_eula=true",
-            )
-            with unsampled_lock:
-                unsampled_counter["count"] += 1
-
-        elif llm_api == "vertexai":
-            project_id = os.environ.get("GCLOUD_PROJECT_ID")
-            region = os.environ.get("GCLOUD_REGION")
-            endpoint_id = os.environ.get("VERTEXAI_ENDPOINT_ID")
-            access_token = os.environ.get("GCLOUD_ACCESS_TOKEN", "").strip()
-            if not all([project_id, region, endpoint_id, access_token]):
-                raise ValueError("Missing required VertexAI env vars.")
-            url = (
-                f"https://{region}-aiplatform.googleapis.com/v1/projects/"
-                f"{project_id}/locations/{region}/endpoints/{endpoint_id}:predict"
-            )
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            }
-            if "max_new_tokens" in sampling_params:
-                sampling_params["maxOutputTokens"] = sampling_params.pop("max_new_tokens")
-            data = {
-                "instances": [{"prompt": prompt}],
-                "parameters": sampling_params,
-            }
+            headers = {"Authorization": f"Bearer {key}"}
             fire_and_forget_post(address, body, headers)
+
             with unsampled_lock:
                 unsampled_counter["count"] += 1
 
@@ -713,7 +701,8 @@ def _run_unsampled_records(
             logger.warning(f"[request #{request_id}][unsampled] Unsupported llm_api: {llm_api}")
 
     except Exception as e:
-        logger.exception(f"[request #{request_id}][unsampled] Dispatch failed: {e}")
+        trigger_fatal(e)
+        raise
 
     # --- Log the dispatch event ---
     with log_lock:
