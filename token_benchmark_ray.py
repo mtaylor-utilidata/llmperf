@@ -74,7 +74,7 @@ def _start_async_loop():
     asyncio.set_event_loop(_async_loop)
 
     _async_client = httpx.AsyncClient(
-        timeout=60,
+        timeout=180,
         limits=httpx.Limits(
             max_connections=2000,
             max_keepalive_connections=500,
