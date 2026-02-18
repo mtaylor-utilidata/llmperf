@@ -158,9 +158,9 @@ def run_schedule_mode(
 
     logger.info("Tokenizing the largest request up front to warm up tokenizer...")
 
-    # Warm up tokenizer with largest request
+    # Warm up tokenizer with the largest request
     tokenizer_warmup_start = time.monotonic()
-    max_input_tokens = max(r["input_tokens"] for r in schedule_sampled)
+    max_input_tokens = max((r["input_tokens"] for r in schedule), default=0)
     _ = build_scheduled_sonnet_prompt(
         input_tokens=max_input_tokens,
         output_tokens=500,
@@ -281,7 +281,11 @@ def run_schedule_mode(
 
     logger.info(f"\nResults for schedule-mode benchmark for {model} queried with {llm_api} API.\n")
 
-    summary = metrics_summary(completed_sampled_requests, start_time_mono, time.monotonic())
+    summary: dict[str, Any] = {}
+
+    if completed_sampled_requests:
+        summary = metrics_summary(completed_sampled_requests, start_time_mono, time.monotonic())
+
     summary.update({
         "model": model,
         "num_concurrent_requests": "scheduled",
