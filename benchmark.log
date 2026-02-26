@@ -1,0 +1,192 @@
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+You are using the default legacy behaviour of the <class 'transformers.models.llama.tokenization_llama_fast.LlamaTokenizerFast'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565 - if you loaded a llama tokenizer from a GGUF file you can ignore this message.
+2025-12-23 19:30:00,730	INFO worker.py:2007 -- Started a local Ray instance.
+/opt/venv/lib/python3.10/site-packages/ray/_private/worker.py:2046: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
+  warnings.warn(
+[19:30:02.314] [INFO] Log level set to INFO
+[schedule mode] Using schedule runner. File: /app/schedule_files/experiment_rate5000_isl1024_osl50.csv
+[19:30:03.559] [INFO] Loaded HF tokenizer for model 'Qwen/Qwen3-Coder-480B-A35B-Instruct'.
+[19:30:03.733] [INFO] ***Sample Sizes Calculated *** Total sampled: 2388, not sampled: 47612
+[19:30:03.950] [INFO] Tokenizing the largest request up front to warm up tokenizer...
+[19:30:04.004] [INFO] Tokenizer warmup completed in 0.054s
+[19:30:04.004] [INFO] 
+*** Scheduled launch starting in 15s at 2025-12-23T19:30:19+00:00 *** 
+  Total sampled requests to launch: 2388 
+  Max number of requests measured per second: 4 
+  Number of request launchers in pool: 700 
+  Schedule should continue on track as long as requests don't exceed ~175.0s e2e latency on average.
+
+[33m(raylet)[0m WARNING: 896 PYTHON worker processes have been started on node: 831924018c0c48dedbf1b013f80f669f059cbd4890f17d5b6491bee2 with address: 192.168.1.121. This could be a result of using a large number of actors, or due to tasks blocked in ray.get() calls (see https://github.com/ray-project/ray/issues/3644 for some discussion of workarounds).
+[19:30:29.033] [INFO] [progress +10.0s] Sampled: 0/2388 | Unsampled: 776/47612 | Total: 776/50000 | Launchers busy: 41/700 (5.9% used)
+[36m(pid=gcs_server)[0m [2025-12-23 19:30:29,577 E 110 110] (gcs_server) gcs_server.cc:303: Failed to establish connection to the event+metrics exporter agent. Events and metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[33m(raylet)[0m [2025-12-23 19:30:31,029 E 462 462] (raylet) main.cc:1032: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[36m(pid=599)[0m [2025-12-23 19:30:31,592 E 599 3406] core_worker_process.cc:842: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[2025-12-23 19:30:32,319 E 1 597] core_worker_process.cc:842: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[36m(OpenAIChatCompletionsClient pid=17965)[0m [2025-12-23 19:30:36,594 E 17965 25533] core_worker_process.cc:842: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14[32m [repeated 414x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[19:30:39.041] [INFO] [progress +20.0s] Sampled: 9/2388 | Unsampled: 1580/47612 | Total: 1589/50000 | Launchers busy: 72/700 (10.3% used) | Average e2e latency of last 9 sampled requests: 16.256s
+[36m(OpenAIChatCompletionsClient pid=49839)[0m [2025-12-23 19:30:41,582 E 49839 55709] core_worker_process.cc:842: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14[32m [repeated 509x across cluster][0m
+[19:30:49.076] [INFO] [progress +30.1s] Sampled: 17/2388 | Unsampled: 2358/47612 | Total: 2375/50000 | Launchers busy: 104/700 (14.9% used) | Average e2e latency of last 17 sampled requests: 18.093s
+[19:30:49.077] [INFO]   Lag stats — Sampled: avg 0.007s | med 0.003s | max 0.129s || Unsampled: avg 0.004s | med 0.001s | max 0.273s
+[19:30:59.117] [INFO] [progress +40.1s] Sampled: 34/2388 | Unsampled: 3189/47612 | Total: 3223/50000 | Launchers busy: 127/700 (18.1% used) | Average e2e latency of last 34 sampled requests: 23.365s
+[19:31:09.160] [INFO] [progress +50.1s] Sampled: 40/2388 | Unsampled: 4024/47612 | Total: 4064/50000 | Launchers busy: 158/700 (22.6% used) | Average e2e latency of last 40 sampled requests: 25.170s
+[19:31:19.184] [INFO] [progress +60.2s] Sampled: 53/2388 | Unsampled: 4777/47612 | Total: 4830/50000 | Launchers busy: 188/700 (26.9% used) | Average e2e latency of last 40 sampled requests: 33.185s
+[19:31:19.184] [INFO]   Lag stats — Sampled: avg 0.010s | med 0.008s | max 0.129s || Unsampled: avg 0.006s | med 0.003s | max 0.273s
+[19:31:29.234] [INFO] [progress +70.2s] Sampled: 62/2388 | Unsampled: 5561/47612 | Total: 5623/50000 | Launchers busy: 214/700 (30.6% used) | Average e2e latency of last 40 sampled requests: 38.624s
+[19:31:39.290] [INFO] [progress +80.3s] Sampled: 75/2388 | Unsampled: 6333/47612 | Total: 6408/50000 | Launchers busy: 241/700 (34.4% used) | Average e2e latency of last 40 sampled requests: 47.341s
+[19:31:49.323] [INFO] [progress +90.3s] Sampled: 87/2388 | Unsampled: 7080/47612 | Total: 7167/50000 | Launchers busy: 271/700 (38.7% used) | Average e2e latency of last 40 sampled requests: 53.595s
+[19:31:49.323] [INFO]   Lag stats — Sampled: avg 0.015s | med 0.011s | max 0.390s || Unsampled: avg 0.101s | med 0.004s | max 1.645s
+[19:31:59.375] [INFO] [progress +100.3s] Sampled: 99/2388 | Unsampled: 7808/47612 | Total: 7907/50000 | Launchers busy: 297/700 (42.4% used) | Average e2e latency of last 40 sampled requests: 61.087s
+[19:32:09.462] [INFO] [progress +110.4s] Sampled: 109/2388 | Unsampled: 8568/47612 | Total: 8677/50000 | Launchers busy: 329/700 (47.0% used) | Average e2e latency of last 40 sampled requests: 66.933s
+[19:32:19.512] [INFO] [progress +120.5s] Sampled: 358/2388 | Unsampled: 9217/47612 | Total: 9575/50000 | Launchers busy: 3/700 (0.4% used) | Average e2e latency of last 40 sampled requests: 31.498s
+[19:32:19.512] [INFO]   Lag stats — Sampled: avg 0.017s | med 0.014s | max 0.390s || Unsampled: avg 0.602s | med 0.007s | max 4.688s
+[19:32:29.538] [INFO] [progress +130.5s] Sampled: 509/2388 | Unsampled: 10027/47612 | Total: 10536/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.001s
+[19:32:39.603] [INFO] [progress +140.6s] Sampled: 548/2388 | Unsampled: 10890/47612 | Total: 11438/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 0.983s
+[19:32:49.660] [INFO] [progress +150.6s] Sampled: 588/2388 | Unsampled: 11719/47612 | Total: 12307/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.022s
+[19:32:49.661] [INFO]   Lag stats — Sampled: avg 0.018s | med 0.015s | max 0.390s || Unsampled: avg 1.489s | med 0.020s | max 5.824s
+[19:32:59.718] [INFO] [progress +160.7s] Sampled: 628/2388 | Unsampled: 12557/47612 | Total: 13185/50000 | Launchers busy: 8/700 (1.1% used) | Average e2e latency of last 40 sampled requests: 1.055s
+[19:33:09.816] [INFO] [progress +170.7s] Sampled: 667/2388 | Unsampled: 13402/47612 | Total: 14069/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.166s
+[19:33:19.887] [INFO] [progress +180.8s] Sampled: 710/2388 | Unsampled: 14216/47612 | Total: 14926/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 0.987s
+[19:33:19.887] [INFO]   Lag stats — Sampled: avg 0.019s | med 0.017s | max 0.390s || Unsampled: avg 1.733s | med 1.453s | max 5.824s
+[19:33:29.958] [INFO] [progress +190.9s] Sampled: 749/2388 | Unsampled: 15040/47612 | Total: 15789/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.052s
+[19:33:40.066] [INFO] [progress +201.0s] Sampled: 790/2388 | Unsampled: 15872/47612 | Total: 16662/50000 | Launchers busy: 6/700 (0.9% used) | Average e2e latency of last 40 sampled requests: 1.044s
+[19:33:50.152] [INFO] [progress +211.1s] Sampled: 830/2388 | Unsampled: 16709/47612 | Total: 17539/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.073s
+[19:33:50.152] [INFO]   Lag stats — Sampled: avg 0.020s | med 0.017s | max 0.390s || Unsampled: avg 1.812s | med 1.832s | max 5.824s
+[19:34:00.257] [INFO] [progress +221.2s] Sampled: 870/2388 | Unsampled: 17482/47612 | Total: 18352/50000 | Launchers busy: 6/700 (0.9% used) | Average e2e latency of last 40 sampled requests: 1.075s
+[19:34:10.334] [INFO] [progress +231.3s] Sampled: 912/2388 | Unsampled: 18334/47612 | Total: 19246/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.078s
+[19:34:20.457] [INFO] [progress +241.4s] Sampled: 952/2388 | Unsampled: 19200/47612 | Total: 20152/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.090s
+[19:34:20.457] [INFO]   Lag stats — Sampled: avg 0.021s | med 0.017s | max 0.470s || Unsampled: avg 1.801s | med 1.798s | max 5.824s
+[19:34:30.537] [INFO] [progress +251.5s] Sampled: 994/2388 | Unsampled: 20020/47612 | Total: 21014/50000 | Launchers busy: 3/700 (0.4% used) | Average e2e latency of last 40 sampled requests: 0.998s
+[19:34:40.651] [INFO] [progress +261.6s] Sampled: 1031/2388 | Unsampled: 20836/47612 | Total: 21867/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 0.963s
+[19:34:50.727] [INFO] [progress +271.7s] Sampled: 1073/2388 | Unsampled: 21623/47612 | Total: 22696/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.010s
+[19:34:50.727] [INFO]   Lag stats — Sampled: avg 0.021s | med 0.017s | max 0.470s || Unsampled: avg 1.680s | med 1.594s | max 5.824s
+[19:35:00.869] [INFO] [progress +281.7s] Sampled: 1113/2388 | Unsampled: 22450/47612 | Total: 23563/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.008s
+[19:35:10.978] [INFO] [progress +291.9s] Sampled: 1153/2388 | Unsampled: 23264/47612 | Total: 24417/50000 | Launchers busy: 3/700 (0.4% used) | Average e2e latency of last 40 sampled requests: 1.055s
+[19:35:21.102] [INFO] [progress +302.0s] Sampled: 1193/2388 | Unsampled: 24069/47612 | Total: 25262/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.028s
+[19:35:21.126] [INFO]   Lag stats — Sampled: avg 0.021s | med 0.018s | max 0.470s || Unsampled: avg 1.595s | med 1.212s | max 5.824s
+[19:35:31.292] [INFO] [progress +312.2s] Sampled: 1234/2388 | Unsampled: 24870/47612 | Total: 26104/50000 | Launchers busy: 3/700 (0.4% used) | Average e2e latency of last 40 sampled requests: 1.039s
+[19:35:41.405] [INFO] [progress +322.3s] Sampled: 1274/2388 | Unsampled: 25668/47612 | Total: 26942/50000 | Launchers busy: 3/700 (0.4% used) | Average e2e latency of last 40 sampled requests: 1.025s
+[19:35:51.542] [INFO] [progress +332.4s] Sampled: 1315/2388 | Unsampled: 26470/47612 | Total: 27785/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.060s
+[19:35:51.564] [INFO]   Lag stats — Sampled: avg 0.021s | med 0.018s | max 0.470s || Unsampled: avg 1.460s | med 1.028s | max 5.824s
+[19:36:01.685] [INFO] [progress +342.6s] Sampled: 1357/2388 | Unsampled: 27264/47612 | Total: 28621/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.095s
+[19:36:11.835] [INFO] [progress +352.7s] Sampled: 1395/2388 | Unsampled: 28036/47612 | Total: 29431/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.033s
+[19:36:21.945] [INFO] [progress +362.8s] Sampled: 1437/2388 | Unsampled: 28821/47612 | Total: 30258/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.027s
+[19:36:21.945] [INFO]   Lag stats — Sampled: avg 0.022s | med 0.018s | max 0.470s || Unsampled: avg 1.342s | med 0.884s | max 5.824s
+[19:36:32.052] [INFO] [progress +373.0s] Sampled: 1478/2388 | Unsampled: 29646/47612 | Total: 31124/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.048s
+[19:36:42.164] [INFO] [progress +383.1s] Sampled: 1516/2388 | Unsampled: 30404/47612 | Total: 31920/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.044s
+[19:36:52.284] [INFO] [progress +393.2s] Sampled: 1558/2388 | Unsampled: 31220/47612 | Total: 32778/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.085s
+[19:36:52.284] [INFO]   Lag stats — Sampled: avg 0.022s | med 0.018s | max 0.470s || Unsampled: avg 1.277s | med 0.847s | max 5.824s
+[19:37:02.446] [INFO] [progress +403.3s] Sampled: 1599/2388 | Unsampled: 32045/47612 | Total: 33644/50000 | Launchers busy: 6/700 (0.9% used) | Average e2e latency of last 40 sampled requests: 1.059s
+[19:37:12.589] [INFO] [progress +413.5s] Sampled: 1641/2388 | Unsampled: 32836/47612 | Total: 34477/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.032s
+[19:37:22.770] [INFO] [progress +423.6s] Sampled: 1681/2388 | Unsampled: 33658/47612 | Total: 35339/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.042s
+[19:37:22.771] [INFO]   Lag stats — Sampled: avg 0.022s | med 0.018s | max 0.470s || Unsampled: avg 1.254s | med 0.886s | max 5.824s
+[19:37:32.941] [INFO] [progress +433.8s] Sampled: 1721/2388 | Unsampled: 34443/47612 | Total: 36164/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.062s
+[19:37:43.075] [INFO] [progress +444.0s] Sampled: 1762/2388 | Unsampled: 35258/47612 | Total: 37020/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.017s
+[19:37:53.221] [INFO] [progress +454.1s] Sampled: 1802/2388 | Unsampled: 36064/47612 | Total: 37866/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.049s
+[19:37:53.221] [INFO]   Lag stats — Sampled: avg 0.022s | med 0.019s | max 0.470s || Unsampled: avg 1.249s | med 0.902s | max 5.824s
+[19:38:03.392] [INFO] [progress +464.2s] Sampled: 1843/2388 | Unsampled: 36881/47612 | Total: 38724/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.028s
+[19:38:13.602] [INFO] [progress +474.4s] Sampled: 1882/2388 | Unsampled: 37705/47612 | Total: 39587/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.084s
+[19:38:23.750] [INFO] [progress +484.6s] Sampled: 1925/2388 | Unsampled: 38502/47612 | Total: 40427/50000 | Launchers busy: 3/700 (0.4% used) | Average e2e latency of last 40 sampled requests: 1.039s
+[19:38:23.750] [INFO]   Lag stats — Sampled: avg 0.022s | med 0.019s | max 0.470s || Unsampled: avg 1.292s | med 0.976s | max 5.824s
+[19:38:33.897] [INFO] [progress +494.8s] Sampled: 1965/2388 | Unsampled: 39340/47612 | Total: 41305/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.039s
+[19:38:44.055] [INFO] [progress +504.9s] Sampled: 2006/2388 | Unsampled: 40151/47612 | Total: 42157/50000 | Launchers busy: 6/700 (0.9% used) | Average e2e latency of last 40 sampled requests: 1.037s
+[19:38:54.205] [INFO] [progress +515.1s] Sampled: 2046/2388 | Unsampled: 40968/47612 | Total: 43014/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.094s
+[19:38:54.210] [INFO]   Lag stats — Sampled: avg 0.023s | med 0.019s | max 0.470s || Unsampled: avg 1.326s | med 1.052s | max 5.824s
+[19:39:04.441] [INFO] [progress +525.2s] Sampled: 2087/2388 | Unsampled: 41806/47612 | Total: 43893/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.107s
+[19:39:14.616] [INFO] [progress +535.5s] Sampled: 2128/2388 | Unsampled: 42647/47612 | Total: 44775/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.104s
+[19:39:24.827] [INFO] [progress +545.6s] Sampled: 2167/2388 | Unsampled: 43463/47612 | Total: 45630/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.203s
+[19:39:24.828] [INFO]   Lag stats — Sampled: avg 0.023s | med 0.019s | max 0.470s || Unsampled: avg 1.344s | med 1.137s | max 5.824s
+[19:39:35.006] [INFO] [progress +555.8s] Sampled: 2208/2388 | Unsampled: 44275/47612 | Total: 46483/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.159s
+[19:39:45.178] [INFO] [progress +566.0s] Sampled: 2251/2388 | Unsampled: 45104/47612 | Total: 47355/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.087s
+[19:39:55.361] [INFO] [progress +576.2s] Sampled: 2287/2388 | Unsampled: 45838/47612 | Total: 48125/50000 | Launchers busy: 5/700 (0.7% used) | Average e2e latency of last 40 sampled requests: 1.021s
+[19:39:55.366] [INFO]   Lag stats — Sampled: avg 0.024s | med 0.019s | max 0.821s || Unsampled: avg 1.355s | med 1.231s | max 5.824s
+[19:40:05.526] [INFO] [progress +586.4s] Sampled: 2331/2388 | Unsampled: 46591/47612 | Total: 48922/50000 | Launchers busy: 4/700 (0.6% used) | Average e2e latency of last 40 sampled requests: 1.074s
+[19:40:15.755] [INFO] [progress +596.5s] Sampled: 2372/2388 | Unsampled: 47379/47612 | Total: 49751/50000 | Launchers busy: 6/700 (0.9% used) | Average e2e latency of last 40 sampled requests: 1.005s
+[19:40:25.404] [INFO] 
+Results for schedule-mode benchmark for Qwen/Qwen3-Coder-480B-A35B-Instruct queried with openai API.
+
+sum_inter_token_latency_s
+    p25 = 0.8451777989539551
+    p50 = 0.9950641038594767
+    p75 = 1.1640881971543422
+    p90 = 10.135736374452245
+    p95 = 13.30968789481559
+    p99 = 17.100276643432455
+    mean = 2.713950882494505
+    min = 0.07115423900540918
+    max = 21.161725671438035
+    stddev = 4.114983740838472
+mean_inter_token_latency_s
+    p25 = 0.018657736758710904
+    p50 = 0.01951111161624939
+    p75 = 0.02073295014920672
+    p90 = 0.2032761688039397
+    p95 = 0.2996906303586375
+    p99 = 0.31259228079912954
+    mean = 0.055369886590297866
+    min = 0.0135417161276564
+    max = 0.32322071385278833
+    stddev = 0.08313058384098643
+ttft_s
+    p25 = 0.10256336675956845
+    p50 = 0.11004237851011567
+    p75 = 0.15940458154364023
+    p90 = 33.09366810221695
+    p95 = 51.84772515274526
+    p99 = 66.31843476771087
+    mean = 6.736807773063747
+    min = 0.08907518599880859
+    max = 70.02349427196896
+    stddev = 16.288588393214308
+[19:40:25.917] [INFO] [progress +606.8s] Sampled: 2388/2388 | Unsampled: 47612/47612 | Total: 50000/50000 | Launchers busy: 0/700 (0.0% used) | Average e2e latency of last 40 sampled requests: 1.047s
+[19:40:25.918] [INFO]   Lag stats — Sampled: avg 0.024s | med 0.019s | max 0.821s || Unsampled: avg 1.405s | med 1.305s | max 5.824s
+[19:40:25.918] [INFO]   Lag stats — Sampled: avg 0.024s | med 0.019s | max 0.821s || Unsampled: avg 1.405s | med 1.305s | max 5.824s
+[19:40:25.918] [ERROR] Some requests had significant dispatch lag. Check logs for details.
+end_to_end_latency_s
+    p25 = 0.9615959174698219
+    p50 = 1.1048201020166744
+    p75 = 1.284087727748556
+    p90 = 43.36516925910841
+    p95 = 63.779363072849826
+    p99 = 80.80095213522145
+    mean = 9.450863259566582
+    min = 0.16791269899113104
+    max = 85.51768816000549
+    stddev = 20.017296168895626
+request_output_throughput_token_per_s
+    p25 = 43.985438330029154
+    p50 = 46.72521543388575
+    p75 = 48.54034784118743
+    p90 = 49.94975025886648
+    p95 = 50.836943528280734
+    p99 = 52.59251967791622
+    mean = 38.61440935104514
+    min = 0.4959783953142639
+    max = 65.83600067778997
+    stddev = 18.05284947064505
+number_input_tokens
+    p25 = 1002.0
+    p50 = 1024.0
+    p75 = 1045.0
+    p90 = 1064.0
+    p95 = 1074.0
+    p99 = 1092.13
+    mean = 1022.9204355108877
+    min = 912
+    max = 1128
+    stddev = 32.06469216700833
+number_output_tokens
+    p25 = 45.0
+    p50 = 50.0
+    p75 = 55.0
+    p90 = 59.0
+    p95 = 62.0
+    p99 = 67.0
+    mean = 49.915829145728644
+    min = 2
+    max = 75
+    stddev = 7.062059026596759
+Number Of Errored Requests: 0
+Overall Output Throughput: 196.5681611690485
+Number Of Completed Requests: 2388
+Completed Requests Per Minute: 236.2795504349975
+[33m(raylet)[0m WARNING: 1351 PYTHON worker processes have been started on node: 831924018c0c48dedbf1b013f80f669f059cbd4890f17d5b6491bee2 with address: 192.168.1.121. This could be a result of using a large number of actors, or due to tasks blocked in ray.get() calls (see https://github.com/ray-project/ray/issues/3644 for some discussion of workarounds).[32m [repeated 2x across cluster][0m

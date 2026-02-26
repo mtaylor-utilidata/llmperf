@@ -43,6 +43,9 @@ _async_client = None
 _async_queue = None
 ASYNC_DISPATCHER_WORKERS = 500  # tune this
 
+RETRYABLE_ERRORS = (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadTimeout)
+MAX_REQUEST_RETRIES = 3
+
 
 FATAL_ERROR = threading.Event()
 FATAL_ERROR_EXC = None
@@ -59,7 +62,17 @@ async def _async_dispatcher():
     while True:
         try:
             url, json_body, headers = await _async_queue.get()
-            await _async_client.post(url, json=json_body, headers=headers)
+            for attempt in range(MAX_REQUEST_RETRIES):
+                try:
+                    await _async_client.post(url, json=json_body, headers=headers)
+                    break
+                except RETRYABLE_ERRORS as e:
+                    if attempt < MAX_REQUEST_RETRIES - 1:
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                    else:
+                        logger.warning(
+                            f"Request failed after {MAX_REQUEST_RETRIES} retries, skipping: {e}"
+                        )
         except Exception as e:
             trigger_fatal(e)
             raise
